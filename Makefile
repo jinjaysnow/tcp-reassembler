@@ -6,7 +6,7 @@ main: main.o hashtbl.o
 hashtbl.o: hashtbl.c hashtbl.h
 	cc -o hashtbl.o -c hashtbl.c 
 
-main.o: main.c hashtbl.h
+main.o: main.c main.h hashtbl.h 
 	cc -o main.o -c main.c -g
 
 clean:

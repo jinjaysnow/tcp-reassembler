@@ -13,51 +13,9 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
-#include <netinet/ip.h>
-#include <netinet/ip6.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
-#include <sys/stat.h>
 #include <dirent.h>
-#include <pcap.h>
 #include "hashtbl.h"
-
-
-// the type code of the pcap_packet in an ETHERNET header
-#define ETHER_TYPE_IP4 0x0800
-#define ETHER_TYPE_IP6 0x86DD
-// the offset value of the pcap_packet (in byte number)
-#define ETHER_OFFSET_IP 14
-// protocol code
-#define PROTOCOL_IP4 AF_INET
-#define PROTOCOL_IP6 AF_INET6
-#define PROTOCOL_TCP 0x06
-#define PROTOCOL_UDP 0x11
-// constant
-#ifndef __FILE__
-#define __FILE__ "main"
-#endif /* __FILE__ */
-#define TRUE 1
-#define FALSE 0
-#define HASH_SIZE 100
-#define PCAP_DIR "pcaps"
-#define RSSB_DIR "https"
-#define HTTP_DIR "files"
-// function
-#define _IP4(x) ((ip4_hdr *)(x))
-#define _IP6(x) ((ip6_hdr *)(x))
-
-
-typedef int bool;
-typedef struct ip ip4_hdr;
-typedef struct ip6_hdr ip6_hdr;
-typedef struct tcphdr tcp_hdr;
-typedef char http_hdr;
-typedef struct {
-    struct pcap_pkthdr header;
-    const u_char *packet;
-} pcap_item;
-
+#include "main.h"
 
 // my custom function
 void error(const char *format, ...) {
@@ -89,6 +47,10 @@ char *mystrdup(int argc, const char *str1, ...) {
     return ss;
 }
 
+char *pathcat(char *dir, char *filename) {
+    return mystrdup(3, dir, PATH_DELIMITER, filename);
+}
+
 size_t hexprint(void *ptr, size_t length) {
     size_t byte_counter = 0;
     char *byte_ptr = (char *)ptr;
@@ -108,6 +70,12 @@ size_t hexprint(void *ptr, size_t length) {
 
     printf("\n");
     return byte_counter;
+}
+
+bool is_little_endian() {
+   unsigned int i = 1;
+   char *c = (char*)&i;
+   return *c;
 }
 
 // judge function
@@ -132,11 +100,12 @@ bool is_ip(int protocol) {
     return is_ip4(protocol) || is_ip6(protocol);
 }
 
-bool is_tcp(int ip_protocol, void *ip_packet) {
-    if (is_ip4(ip_protocol))
+bool is_tcp(void *ip_packet) {
+    int protocol = get_ip_protocol(ip_packet);
+    if (is_ip4(protocol))
         return _IP4(ip_packet)->ip_p == PROTOCOL_TCP;
     // TODO
-    else if (is_ip6(ip_protocol))
+    else if (is_ip6(protocol))
         return 0;
     return FALSE;
 }
@@ -146,31 +115,36 @@ int get_ether_type(const u_char *pcap_packet) {
     return ((int)(pcap_packet[12]) << 8) | (int)pcap_packet[13];
 }
 
-int get_ip_protocol(const u_char *pcap_packet) {
-    switch (get_ether_type(pcap_packet)) {
-        case ETHER_TYPE_IP4: return PROTOCOL_IP4;
-        case ETHER_TYPE_IP6: return PROTOCOL_IP6;
-        default: return -1;
-    }
-}
-
 /*
  * @protocol: IPv4 or IPv6
  */
-void *get_ip_header(int protocol, const u_char *pcap_packet) {
+void *get_ip_header(const u_char *pcap_packet) {
+    int offset;
+    switch (get_ether_type(pcap_packet)) {
+        case ETHER_TYPE_8021Q: offset = ETHER_OFFSET_8021Q;break;
+        case ETHER_TYPE_IP4: offset = ETHER_OFFSET_IP4;break;
+        case ETHER_TYPE_IP6: offset = ETHER_OFFSET_IP6;break;
+        default: return NULL;
+    }
     //skip past the Ethernet II header
-    if (is_ip4(protocol))
-        return (void *)(pcap_packet + ETHER_OFFSET_IP);
-    // TODO
-    else if (is_ip6(protocol))
-        return 0;
-    return NULL;
+    return (void *)(pcap_packet + offset);
+}
+
+int get_ip_protocol(void *ip_packet) {
+    char version = *((char *)ip_packet);
+    if (is_little_endian())
+        version = (version & 0xF0) >> 4;
+    else
+        version &= 0x0F;
+
+    return 4 == version ? PROTOCOL_IP4 : PROTOCOL_IP6;
 }
 
 /*
  * @ip_packet: beginning memory address of IP packet, same with IP header
  */
-tcp_hdr *get_tcp_header(int protocol, void *ip_packet) {
+tcp_hdr *get_tcp_header(void *ip_packet) {
+    int protocol = get_ip_protocol(ip_packet);
     if (is_ip4(protocol))
         return (tcp_hdr *)((char *)(ip_packet) + _IP4(ip_packet)->ip_hl * 4);
     // TODO
@@ -186,19 +160,20 @@ const char *get_tcp_data(tcp_hdr *tcp_packet) {
     return (const char *)((char *)(tcp_packet) + tcp_packet->th_off * 4);
 }
 
-size_t get_tcp_data_length(int protocol, void *ip_packet) {
+size_t get_tcp_data_length(void *ip_packet) {
     size_t ip_len;
     size_t ip_header_len;
     size_t tcp_header_len;
+    int protocol = get_ip_protocol(ip_packet);
 
     if (is_ip4(protocol)) {
         ip_header_len = _IP4(ip_packet)->ip_hl * 4;
         ip_len = ntohs(_IP4(ip_packet)->ip_len);
         // `th_off` specifies the size of the TCP header in 32-bit words
-        tcp_header_len = get_tcp_header(PROTOCOL_IP4, ip_packet)->th_off * 4;
     } else {
         // TODO
     }
+    tcp_header_len = get_tcp_header(ip_packet)->th_off * 4;
 
     return ip_len - (ip_header_len + tcp_header_len);
 }
@@ -206,10 +181,11 @@ size_t get_tcp_data_length(int protocol, void *ip_packet) {
 /*
  * return something like "192.168.137.1.80--192.168.137.233.8888"
  */
-const char *get_ip_port_pair(int protocol, void *ip_packet) {
+const char *get_ip_port_pair(void *ip_packet) {
     int addr_len;
     void *ip_src;
     void *ip_dst;
+    int protocol = get_ip_protocol(ip_packet);
 
     if (is_ip4(protocol)) {
         addr_len = INET_ADDRSTRLEN;
@@ -225,7 +201,7 @@ const char *get_ip_port_pair(int protocol, void *ip_packet) {
     inet_ntop(protocol, ip_src, buf_src, addr_len);
     inet_ntop(protocol, ip_dst, buf_dst, addr_len);
 
-    tcp_hdr *tcp_packet = get_tcp_header(protocol, ip_packet);
+    tcp_hdr *tcp_packet = get_tcp_header(ip_packet);
     int port_src = ntohs(tcp_packet->th_sport);
     int port_dst = ntohs(tcp_packet->th_dport);
 
@@ -295,9 +271,9 @@ void remove_hash_nodes(const char *key) {
 /*
  * use (source ip:port, destination ip:port) as key, hash pcap_item
  */
-const char *insert_hash_node(int protocol, const u_char *pcap_packet, struct pcap_pkthdr *pcap_header) {
-    void *ip_packet = get_ip_header(protocol, pcap_packet);
-    const char *key = get_ip_port_pair(protocol, ip_packet);
+const char *insert_hash_node(const u_char *pcap_packet, struct pcap_pkthdr *pcap_header) {
+    void *ip_packet = get_ip_header(pcap_packet);
+    const char *key = get_ip_port_pair(ip_packet);
     pcap_item *pcap = create_pcap_item(pcap_packet, pcap_header);
 
     if (-1 == hashtbl_insert(get_hash_table(), key, (void *)pcap))
@@ -309,10 +285,8 @@ const char *insert_hash_node(int protocol, const u_char *pcap_packet, struct pca
 int cmp_pcap_packet(pcap_item *p1, pcap_item *p2) {
     const u_char *pck1 = p1->packet;
     const u_char *pck2 = p2->packet;
-    int protocol1 = get_ip_protocol(pck1);
-    int protocol2 = get_ip_protocol(pck2);
-    tcp_hdr *t1 = get_tcp_header(protocol1, get_ip_header(protocol1, pck1));
-    tcp_hdr *t2 = get_tcp_header(protocol2, get_ip_header(protocol2, pck2));
+    tcp_hdr *t1 = get_tcp_header(get_ip_header(pck1));
+    tcp_hdr *t2 = get_tcp_header(get_ip_header(pck2));
 
     int diff_seq = ntohl(t1->th_seq) - ntohl(t2->th_seq);
     int diff_ack = ntohl(t1->th_ack) - ntohl(t2->th_ack);
@@ -399,7 +373,7 @@ struct hashnode_s *sort_pcap_packets(struct hashnode_s *list) {
  * write pcap packet to pcap file
  */
 void write_pcap_to_file(pcap_t *handle, struct hashnode_s *node) {
-    const char *filename = mystrdup(3, PCAP_DIR "/", node->key, ".pcap");
+    const char *filename = pathcat(PCAP_DIR, mystrdup(2, node->key, ".pcap"));
 
     pcap_dumper_t *pd;
     if (!(pd = pcap_dump_open(handle, filename)))
@@ -433,11 +407,10 @@ void write_pcaps_to_files(pcap_t *handle) {
  * write tcp data (maybe contains HTTP request and response) to txt file
  */
 size_t write_tcp_data_to_file(FILE *fp, const u_char *pcap_packet) {
-    int protocol = get_ip_protocol(pcap_packet);
-    void *ip_packet = get_ip_header(protocol, pcap_packet);
-    tcp_hdr *tcp_packet = get_tcp_header(protocol, ip_packet);
-
-    size_t data_len = get_tcp_data_length(protocol, ip_packet);
+    void *ip_packet = get_ip_header(pcap_packet);
+    int protocol = get_ip_protocol(ip_packet);
+    tcp_hdr *tcp_packet = get_tcp_header(ip_packet);
+    size_t data_len = get_tcp_data_length(ip_packet);
     const char *data_ptr = get_tcp_data(tcp_packet);
 
     if (data_len && data_len != fwrite(data_ptr, 1, data_len, fp))
@@ -455,11 +428,11 @@ void write_http_pairs_to_files() {
         char *filename = ent->d_name;
         if (!is_pcap_file(filename))
             continue;
-        filename = mystrdup(3, RSSB_DIR "/", filename, ".txt");
+        filename = pathcat(REQS_DIR, mystrdup(2, filename, ".txt"));
 
         const u_char *pcap_packet;
         struct pcap_pkthdr header;
-        char *pcap_filename = mystrdup(2, PCAP_DIR "/", ent->d_name);
+        char *pcap_filename = pathcat(PCAP_DIR, ent->d_name);
 
         pcap_t *handle = get_pcap_handle(pcap_filename);
         FILE *fp = fopen(filename, "wb");
@@ -478,7 +451,7 @@ void init_environment(int argc, char **argv) {
     if (argc < 2)
         error("usage: %s [file]", argv[0]);
     mkdir(PCAP_DIR, 0754);
-    mkdir(RSSB_DIR, 0754);
+    mkdir(REQS_DIR, 0754);
     mkdir(HTTP_DIR, 0754);
 }
 
@@ -491,14 +464,13 @@ int main(int argc, char **argv) {
     handle = get_pcap_handle(argv[1]);
 
     while (NULL != (pcap_packet = pcap_next(handle, &header))) {
-        int protocol = get_ip_protocol(pcap_packet);
+        void *ip_packet = get_ip_header(pcap_packet);
         // skip if neither IPv4 nor IPv6
-        if (!is_ip(protocol))
+        if (NULL == ip_packet)
             continue;
-
-        void *ip_packet = get_ip_header(protocol, pcap_packet);
-        if (is_tcp(protocol, ip_packet)) {
-            insert_hash_node(protocol, pcap_packet, &header);
+        // TODO: deal with UDP
+        if (is_tcp(ip_packet)) {
+            insert_hash_node(pcap_packet, &header);
         }
     }
 
