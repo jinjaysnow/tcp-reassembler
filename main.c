@@ -1,14 +1,14 @@
 /*
-This is a very troublesome homework...
-
-A pcap file structure for tcp transaction is something like this:
-[pcap_file_header]
-    for each packet
-        [pcap_packet] --this contains packet len info
-        [ip_header]----usually of size 20 or more
-        [tcp_header]--usually of size 20 or more
-        [packet] ---len stored in pcap packet header
-*/
+ * This is a very troublesome homework...
+ *
+ * A pcap file structure for tcp transaction is something like this:
+ *     [pcap_file_header]
+ *     for each packet
+ *         [pcap_packet]  this contains packet len info
+ *         [ip_header]    usually of size 20 or more
+ *         [tcp_header]   usually of size 20 or more
+ *         [tcp_data]     len stored in ip header
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -17,9 +17,9 @@ A pcap file structure for tcp transaction is something like this:
 #include <netinet/ip6.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
-#include <pcap.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <pcap.h>
 #include "hashtbl.h"
 
 
@@ -41,9 +41,8 @@ A pcap file structure for tcp transaction is something like this:
 #define FALSE 0
 #define HASH_SIZE 100
 #define PCAP_DIR "pcaps"
-#define RSSB_DIR "reassembles"
-#define HTTP_DIR "https"
-
+#define RSSB_DIR "https"
+#define HTTP_DIR "files"
 // function
 #define _IP4(x) ((ip4_hdr *)(x))
 #define _IP6(x) ((ip6_hdr *)(x))
@@ -54,14 +53,13 @@ typedef struct ip ip4_hdr;
 typedef struct ip6_hdr ip6_hdr;
 typedef struct tcphdr tcp_hdr;
 typedef char http_hdr;
-typedef struct in_addr ip4_addr;
-typedef struct in6_addr ip6_addr;
 typedef struct {
     struct pcap_pkthdr header;
     const u_char *packet;
 } pcap_item;
 
 
+// my custom function
 void error(const char *format, ...) {
     va_list args;
     va_start(args, format);
@@ -112,15 +110,7 @@ size_t hexprint(void *ptr, size_t length) {
     return byte_counter;
 }
 
-pcap_t *get_handle(char *filename) {
-    char errbuf[PCAP_ERRBUF_SIZE];
-    pcap_t *handle;
-
-    if (!(handle = pcap_open_offline(filename, errbuf)))
-        error("Couldn't open pcap file %s: %s", filename, errbuf);
-    return handle;
-}
-
+// judge function
 bool is_pcap_file(const char *filename) {
     const char *sub = strrchr(filename, '.');
     if (sub == NULL)
@@ -151,6 +141,7 @@ bool is_tcp(int ip_protocol, void *ip_packet) {
     return FALSE;
 }
 
+// packet infomation
 int get_ether_type(const u_char *pcap_packet) {
     return ((int)(pcap_packet[12]) << 8) | (int)pcap_packet[13];
 }
@@ -163,6 +154,9 @@ int get_ip_protocol(const u_char *pcap_packet) {
     }
 }
 
+/*
+ * @protocol: IPv4 or IPv6
+ */
 void *get_ip_header(int protocol, const u_char *pcap_packet) {
     //skip past the Ethernet II header
     if (is_ip4(protocol))
@@ -173,6 +167,9 @@ void *get_ip_header(int protocol, const u_char *pcap_packet) {
     return NULL;
 }
 
+/*
+ * @ip_packet: beginning memory address of IP packet, same with IP header
+ */
 tcp_hdr *get_tcp_header(int protocol, void *ip_packet) {
     if (is_ip4(protocol))
         return (tcp_hdr *)((char *)(ip_packet) + _IP4(ip_packet)->ip_hl * 4);
@@ -182,6 +179,9 @@ tcp_hdr *get_tcp_header(int protocol, void *ip_packet) {
     return NULL;
 }
 
+/*
+ * return beginning memory address of tcp data
+ */
 const char *get_tcp_data(tcp_hdr *tcp_packet) {
     return (const char *)((char *)(tcp_packet) + tcp_packet->th_off * 4);
 }
@@ -203,6 +203,9 @@ size_t get_tcp_data_length(int protocol, void *ip_packet) {
     return ip_len - (ip_header_len + tcp_header_len);
 }
 
+/*
+ * return something like "192.168.137.1.80--192.168.137.233.8888"
+ */
 const char *get_ip_port_pair(int protocol, void *ip_packet) {
     int addr_len;
     void *ip_src;
@@ -233,7 +236,34 @@ const char *get_ip_port_pair(int protocol, void *ip_packet) {
     return (const char *)str;
 }
 
-// single pattern
+pcap_t *get_pcap_handle(char *filename) {
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_t *handle;
+
+    if (!(handle = pcap_open_offline(filename, errbuf)))
+        error("Couldn't open pcap file %s: %s", filename, errbuf);
+    return handle;
+}
+
+/*
+ * a pcap item contains a pcap header and a pointer of beignning of packet
+ */
+pcap_item *create_pcap_item(const u_char *pcap_packet, struct pcap_pkthdr *pcap_header) {
+    size_t pcap_len = pcap_header->caplen;
+    u_char *tmp_packet = malloc(pcap_len);
+    memcpy(tmp_packet, pcap_packet, pcap_len);
+
+    pcap_item *pcap = malloc(sizeof(pcap_item));
+    pcap->header = *pcap_header;
+    pcap->packet = tmp_packet;
+
+    return pcap;
+}
+
+// hash operation
+/*
+ * return a single instance of hash table
+ */
 HASHTBL *get_hash_table() {
     static HASHTBL *hashtbl;
     if(hashtbl == NULL) {
@@ -244,23 +274,32 @@ HASHTBL *get_hash_table() {
     return hashtbl;
 }
 
-void free_hash_data(void *ptr) {
+/*
+ * don't destory hash table until finished all your work!
+ */
+void destory_hash_table() {
+    hashtbl_destroy(get_hash_table());
+}
+
+void free_hash_node(void *ptr) {
     pcap_item *pcap = (pcap_item *)ptr;
     free((void *)pcap->packet);
     free((void *)pcap);
 }
 
-const char *hash_ip_pair(int protocol, const u_char *pcap_packet, struct pcap_pkthdr *pcap_header) {
+void remove_hash_nodes(const char *key) {
+    HASHTBL *hashtbl = get_hash_table();
+    hashtbl_remove(hashtbl, key, free_hash_node);
+}
+
+/*
+ * use (source ip:port, destination ip:port) as key, hash pcap_item
+ */
+const char *insert_hash_node(int protocol, const u_char *pcap_packet, struct pcap_pkthdr *pcap_header) {
     void *ip_packet = get_ip_header(protocol, pcap_packet);
     const char *key = get_ip_port_pair(protocol, ip_packet);
-    size_t pcap_len = pcap_header->caplen;
+    pcap_item *pcap = create_pcap_item(pcap_packet, pcap_header);
 
-    u_char *tmp_packet = malloc(pcap_len);
-    memcpy(tmp_packet, pcap_packet, pcap_len);
-
-    pcap_item *pcap = malloc(sizeof(pcap_item));
-    pcap->header = *pcap_header;
-    pcap->packet = tmp_packet;
     if (-1 == hashtbl_insert(get_hash_table(), key, (void *)pcap))
         error("ERROR: insert to hash table failed");
 
@@ -268,26 +307,22 @@ const char *hash_ip_pair(int protocol, const u_char *pcap_packet, struct pcap_pk
 }
 
 int cmp_pcap_packet(pcap_item *p1, pcap_item *p2) {
-    int protocol1;
-    int protocol2;
     const u_char *pck1 = p1->packet;
     const u_char *pck2 = p2->packet;
-
-    protocol1 = get_ip_protocol(pck1);
+    int protocol1 = get_ip_protocol(pck1);
+    int protocol2 = get_ip_protocol(pck2);
     tcp_hdr *t1 = get_tcp_header(protocol1, get_ip_header(protocol1, pck1));
-    protocol2 = get_ip_protocol(pck2);
     tcp_hdr *t2 = get_tcp_header(protocol2, get_ip_header(protocol2, pck2));
 
-    // TODO: use `t1->th_flags` to drop wrong pcap_packet
-    // TH_FIN TH_SYN TH_RST TH_PUSH TH_ACK TH_URG TH_ECE TH_CWR
     int diff_seq = ntohl(t1->th_seq) - ntohl(t2->th_seq);
     int diff_ack = ntohl(t1->th_ack) - ntohl(t2->th_ack);
-    if (diff_seq)
-        return diff_seq;
-    else
-        return diff_ack;
+
+    return diff_seq ? diff_seq : diff_ack;
 }
 
+/*
+ * sort pcap packets storging in hash table
+ */
 struct hashnode_s *sort_pcap_packets(struct hashnode_s *list) {
     struct hashnode_s *p, *q, *e, *tail;
     int insize, nmerges, psize, qsize, i;
@@ -359,7 +394,11 @@ struct hashnode_s *sort_pcap_packets(struct hashnode_s *list) {
     }
 }
 
-void write_pcap_packets(pcap_t *handle, struct hashnode_s *node) {
+// file operation
+/*
+ * write pcap packet to pcap file
+ */
+void write_pcap_to_file(pcap_t *handle, struct hashnode_s *node) {
     const char *filename = mystrdup(3, PCAP_DIR "/", node->key, ".pcap");
 
     pcap_dumper_t *pd;
@@ -378,19 +417,21 @@ void write_pcap_packets(pcap_t *handle, struct hashnode_s *node) {
     free((void *)filename);
 }
 
-void write_pcap_to_files(pcap_t *handle) {
+void write_pcaps_to_files(pcap_t *handle) {
     HASHTBL *hashtbl = get_hash_table();
-    struct hashnode_s *node;
+
     for (int i = 0; i < HASH_SIZE; i++) {
         if (!hashtbl->nodes[i])
             continue;
         hashtbl->nodes[i] = sort_pcap_packets(hashtbl->nodes[i]);
-        write_pcap_packets(handle, hashtbl->nodes[i]);
-        hashtbl_remove(hashtbl, hashtbl->nodes[i]->key, free_hash_data);
+        write_pcap_to_file(handle, hashtbl->nodes[i]);
+        remove_hash_nodes(hashtbl->nodes[i]->key);
     }
-    hashtbl_destroy(hashtbl);
 }
 
+/*
+ * write tcp data (maybe contains HTTP request and response) to txt file
+ */
 size_t write_tcp_data_to_file(FILE *fp, const u_char *pcap_packet) {
     int protocol = get_ip_protocol(pcap_packet);
     void *ip_packet = get_ip_header(protocol, pcap_packet);
@@ -404,23 +445,23 @@ size_t write_tcp_data_to_file(FILE *fp, const u_char *pcap_packet) {
     return data_len;
 }
 
-void reassemble_pcap_from_files() {
+void write_http_pairs_to_files() {
     DIR *dir;
     struct dirent *ent;
     if (!(dir = opendir(PCAP_DIR)))
         error("open directory '" PCAP_DIR "' failed\n");
 
     while ((ent = readdir(dir)) != NULL) {
-        const u_char *pcap_packet;
-        struct pcap_pkthdr header;
-
         char *filename = ent->d_name;
         if (!is_pcap_file(filename))
             continue;
         filename = mystrdup(3, RSSB_DIR "/", filename, ".txt");
 
+        const u_char *pcap_packet;
+        struct pcap_pkthdr header;
         char *pcap_filename = mystrdup(2, PCAP_DIR "/", ent->d_name);
-        pcap_t *handle = get_handle(pcap_filename);
+
+        pcap_t *handle = get_pcap_handle(pcap_filename);
         FILE *fp = fopen(filename, "wb");
         while (NULL != (pcap_packet = pcap_next(handle, &header)))
             write_tcp_data_to_file(fp, pcap_packet);
@@ -433,37 +474,38 @@ void reassemble_pcap_from_files() {
 }
 
 
+void init_environment(int argc, char **argv) {
+    if (argc < 2)
+        error("usage: %s [file]", argv[0]);
+    mkdir(PCAP_DIR, 0754);
+    mkdir(RSSB_DIR, 0754);
+    mkdir(HTTP_DIR, 0754);
+}
+
 int main(int argc, char **argv) {
     const u_char *pcap_packet;
     struct pcap_pkthdr header;
     pcap_t *handle;
 
-    if (argc < 2)
-        error("usage: %s [file]", argv[0]);
-    else {
-        mkdir(PCAP_DIR, 0754);
-        mkdir(RSSB_DIR, 0754);
-        mkdir(HTTP_DIR, 0754);
-        handle = get_handle(argv[1]);
-    }
+    init_environment(argc, argv);
+    handle = get_pcap_handle(argv[1]);
 
     while (NULL != (pcap_packet = pcap_next(handle, &header))) {
         int protocol = get_ip_protocol(pcap_packet);
+        // skip if neither IPv4 nor IPv6
         if (!is_ip(protocol))
             continue;
 
         void *ip_packet = get_ip_header(protocol, pcap_packet);
         if (is_tcp(protocol, ip_packet)) {
-            hash_ip_pair(protocol, pcap_packet, &header);
-        } else {
-            // TODO
-            continue;
+            insert_hash_node(protocol, pcap_packet, &header);
         }
     }
 
-    write_pcap_to_files(handle);
-    reassemble_pcap_from_files();
+    write_pcaps_to_files(handle);
+    write_http_pairs_to_files();
 
+    destory_hash_table();
     pcap_close(handle);
     return 0;
 }

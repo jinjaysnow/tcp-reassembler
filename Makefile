@@ -10,7 +10,7 @@ main.o: main.c hashtbl.h
 	cc -o main.o -c main.c -g
 
 clean:
-	rm -rf *.o main a.out pcaps reassembles
+	rm -rf *.o main a.out pcaps https files
 
 run:
 	./main test.pcap
