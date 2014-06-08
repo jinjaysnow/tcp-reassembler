@@ -19,23 +19,27 @@ Retrieved from: http://en.literateprograms.org/Hash_table_(C)?oldid=19620
 #include <stdlib.h>
 
 typedef size_t hash_size;
+typedef struct hashnode_s HASHNODE;
 
 struct hashnode_s {
 	char *key;
 	void *data;
-	struct hashnode_s *next;
+	HASHNODE *next;
 };
 
 typedef struct hashtbl {
 	hash_size size;
-	struct hashnode_s **nodes;
+	HASHNODE **nodes;
 	hash_size (*hashfunc)(const char *);
 } HASHTBL;
 
 
 HASHTBL *hashtbl_create(hash_size size, hash_size (*hashfunc)(const char *));
 void hashtbl_destroy(HASHTBL *hashtbl);
+int hashtbl_index(HASHTBL *hashtbl, const char *key);
+HASHNODE *hashtbl_get(HASHTBL *hashtbl, const char *key);
 int hashtbl_insert(HASHTBL *hashtbl, const char *key, void *data);
-int hashtbl_remove(HASHTBL *hashtbl, const char *key, void (*data_free_func)(void *));
+void hashtbl_remove_n(HASHNODE *node, int count, void (*data_free_func)(void *));
+void hashtbl_remove(HASHTBL *hashtbl, const char *key, void (*data_free_func)(void *));
 
 #endif

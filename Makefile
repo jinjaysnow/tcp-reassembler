@@ -10,10 +10,10 @@ main.o: main.c main.h hashtbl.h
 	cc -o main.o -c main.c -g
 
 clean:
-	rm -rf *.o main a.out pcaps https files
+	rm -rf *.o main a.out pcaps requests files
 
 run:
-	./main test.pcap
+	./main
 
 d:
 	make clean && make && make run

@@ -12,163 +12,159 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Retrieved from: http://en.literateprograms.org/Hash_table_(C)?oldid=19620
 */
-#include<string.h>
-#include<stdio.h>
-#include <stdint.h>
-#include"hashtbl.h"
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+#include "hashtbl.h"
 
-#undef get16bits
-#if (defined(__GNUC__) && defined(__i386__)) || defined(__WATCOMC__) \
-  || defined(_MSC_VER) || defined (__BORLANDC__) || defined (__TURBOC__)
-#define get16bits(d) (*((const uint16_t *) (d)))
-#endif
-
-#if !defined (get16bits)
-#define get16bits(d) ((((uint32_t)(((const uint8_t *)(d))[1])) << 8)\
-                       +(uint32_t)(((const uint8_t *)(d))[0]) )
-#endif
+#define REHASH_COUNT 3
 
 static char *mystrdup(const char *s)
 {
-	char *b;
-	if(!(b=malloc(strlen(s)+1))) return NULL;
-	strcpy(b, s);
-	return b;
+    char *b;
+    if (!(b = malloc(strlen(s) + 1))) return NULL;
+    strcpy(b, s);
+    return b;
 }
 
-static hash_size def_hashfunc(const char * key) {
-	// 42 is the answer of everything
-	int len = 42;
-	hash_size hash = len, tmp;
-	int rem;
+static hash_size def_hashfunc(const char *key)
+{
+    unsigned long hash = 5381;
+    int c;
 
-    if (len <= 0 || key == NULL) return 0;
-
-    rem = len & 3;
-    len >>= 2;
-
-    for (;len > 0; len--) {
-        hash  += get16bits (key);
-        tmp    = (get16bits (key+2) << 11) ^ hash;
-        hash   = (hash << 16) ^ tmp;
-        key  += 2*sizeof (uint16_t);
-        hash  += hash >> 11;
-    }
-
-    /* Handle end cases */
-    switch (rem) {
-        case 3: hash += get16bits (key);
-                hash ^= hash << 16;
-                hash ^= ((signed char)key[sizeof (uint16_t)]) << 18;
-                hash += hash >> 11;
-                break;
-        case 2: hash += get16bits (key);
-                hash ^= hash << 11;
-                hash += hash >> 17;
-                break;
-        case 1: hash += (signed char)*key;
-                hash ^= hash << 10;
-                hash += hash >> 1;
-    }
-
-    /* Force "avalanching" of final 127 bits */
-    hash ^= hash << 3;
-    hash += hash >> 5;
-    hash ^= hash << 4;
-    hash += hash >> 17;
-    hash ^= hash << 25;
-    hash += hash >> 6;
+    while (0 != (c = *key++))
+        hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
 
     return hash;
 }
 
 HASHTBL *hashtbl_create(hash_size size, hash_size (*hashfunc)(const char *))
 {
-	HASHTBL *hashtbl;
+    HASHTBL *hashtbl;
 
-	if(!(hashtbl=malloc(sizeof(HASHTBL)))) return NULL;
+    assert(hashtbl = malloc(sizeof(HASHTBL)));
+    assert(hashtbl->nodes = calloc(size, sizeof(struct hashnode_s *)));
 
-	if(!(hashtbl->nodes=calloc(size, sizeof(struct hashnode_s*)))) {
-		free(hashtbl);
-		return NULL;
-	}
+    hashtbl->size = size;
+    hashtbl->hashfunc = hashfunc ? hashfunc : def_hashfunc;
 
-	hashtbl->size=size;
+    return hashtbl;
+}
 
-	if(hashfunc) hashtbl->hashfunc=hashfunc;
-	else hashtbl->hashfunc=def_hashfunc;
-
-	return hashtbl;
+size_t hashtbl_capacity(HASHTBL *hashtbl)
+{
+    size_t count = 0;
+    for (int i = 0; i < hashtbl->size; i++)
+    {
+        if (hashtbl->nodes[i])
+            count++;
+    }
+    return count;
 }
 
 void hashtbl_destroy(HASHTBL *hashtbl)
 {
-	hash_size n;
-	struct hashnode_s *node, *oldnode;
+    hash_size n;
+    struct hashnode_s *node, *oldnode;
 
-	for(n=0; n<hashtbl->size; ++n) {
-		node=hashtbl->nodes[n];
-		while(node) {
-			free(node->key);
-			oldnode=node;
-			node=node->next;
-			free(oldnode);
-		}
-	}
-	free(hashtbl->nodes);
-	free(hashtbl);
+    for (n = 0; n < hashtbl->size; ++n)
+    {
+        node = hashtbl->nodes[n];
+        if (node)
+            hashtbl_remove_n(node, -1, NULL);
+    }
+    free(hashtbl->nodes);
+    free(hashtbl);
+}
+
+int hashtbl_index(HASHTBL *hashtbl, const char *key)
+{
+    hash_size hash = hashtbl->hashfunc(key) % hashtbl->size;
+    HASHNODE *node = hashtbl->nodes[hash];
+
+    if (node && !strcmp(node->key, key))
+        return hash;
+    return -1;
+}
+
+HASHNODE *hashtbl_get(HASHTBL *hashtbl, const char *key)
+{
+    hash_size hash = hashtbl_index(hashtbl, key);
+    if (hash == -1)
+        return NULL;
+    return hashtbl->nodes[hash];
+}
+
+void hashtbl_rehash(HASHTBL *hashtbl)
+{
+    HASHNODE **oldnodes = hashtbl->nodes;
+    HASHNODE **newnodes;
+    hash_size newsize = 2 * hashtbl->size;
+    assert(newnodes = calloc(newsize, sizeof(HASHNODE *)));
+
+    for (int i = 0; i < hashtbl->size; i++)
+    {
+        if (!oldnodes[i])
+            continue;
+        hash_size hash = hashtbl->hashfunc(oldnodes[i]->key) % newsize;
+        if (newnodes[hash]) {
+            i = -1;
+            newsize *= 2;
+            free(newnodes);
+            assert(newnodes = calloc(newsize, sizeof(HASHNODE *)));
+        } else {
+            newnodes[hash] = oldnodes[i];
+        }
+    }
+    hashtbl->nodes = newnodes;
+    hashtbl->size = newsize;
+    free(oldnodes);
 }
 
 int hashtbl_insert(HASHTBL *hashtbl, const char *key, void *data)
 {
-	hash_size hash = hashtbl->hashfunc(key) % hashtbl->size;
-	hash_size rehash = hash;
-	struct hashnode_s *node = hashtbl->nodes[hash];
+    hash_size hash = hashtbl->hashfunc(key) % hashtbl->size;
+    struct hashnode_s *node = hashtbl->nodes[hash];
 
-/*	fprintf(stderr, "hashtbl_insert() key=%s, hash=%d, data=%s\n", key, hash, (char*)data);*/
+    while (node)
+    {
+        if (!strcmp(node->key, key))
+            break;
+        hashtbl_rehash(hashtbl);
+        hash = hashtbl->hashfunc(key) % hashtbl->size;
+        node = hashtbl->nodes[hash];
+    }
 
-	while(node) {
-		if(!strcmp(node->key, key)) {
-			node = node->next;
-			continue;
-		}
+    assert(node = malloc(sizeof(struct hashnode_s)));
+    assert(node->key = mystrdup(key));
 
-		rehash = (rehash + 1) % hashtbl->size;
-		if (rehash == hash)
-			return -1;
-		node = hashtbl->nodes[rehash];
-	}
+    node->data = data;
+    node->next = hashtbl->nodes[hash];
+    hashtbl->nodes[hash] = node;
 
-	if(!(node = malloc(sizeof(struct hashnode_s))))
-		return -1;
-	if(!(node->key = mystrdup(key))) {
-		free(node);
-		return -1;
-	}
-	node->data = data;
-	node->next = hashtbl->nodes[hash];
-	hashtbl->nodes[hash] = node;
-
-	return 0;
+    return hash;
 }
 
-int hashtbl_remove(HASHTBL *hashtbl, const char *key, void (*data_free_func)(void *))
+void hashtbl_remove_n(HASHNODE *node, int count, void (*data_free_func)(void *))
 {
-	struct hashnode_s *node;
-    struct hashnode_s *next;
     if (!data_free_func)
         data_free_func = free;
-	hash_size hash = hashtbl->hashfunc(key) % hashtbl->size;
-
-	node = hashtbl->nodes[hash];
-	while(node) {
-        next = node->next;
-		free(node->key);
+    while (node)
+    {
+        HASHNODE *next = node->next;
+        free(node->key);
         data_free_func(node->data);
-		free(node);
+        free(node);
         node = next;
-	}
-    hashtbl->nodes[hash] = NULL;
+        if (!(--count))
+            break;
+    }
+}
 
-	return 0;
+void hashtbl_remove(HASHTBL *hashtbl, const char *key, void (*data_free_func)(void *))
+{
+    hash_size hash = hashtbl->hashfunc(key) % hashtbl->size;
+    struct hashnode_s *node = hashtbl->nodes[hash];
+    hashtbl_remove_n(node, -1, data_free_func);
+    hashtbl->nodes[hash] = NULL;
 }

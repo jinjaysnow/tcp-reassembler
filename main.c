@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <assert.h>
 #include <dirent.h>
 #include "hashtbl.h"
 #include "main.h"
@@ -27,18 +28,18 @@ void error(const char *format, ...) {
     exit(EXIT_FAILURE);
 }
 
-char *mystrdup(int argc, const char *str1, ...) {
+char *mystrcat(int argc, const char *str1, ...) {
     va_list strs;
     va_start(strs, str1);
     char *ss = strdup(str1);
-    int len = strlen(ss);
+    unsigned int len = strlen(ss);
 
     for (int i = 0; i < argc - 1; i++) {
         const char *s = va_arg(strs, const char *);
         len += strlen(s);
         // 1 for '\0'
         if (!(ss = realloc(ss, len + 1)))
-            error("alloc memory for `mystrdup` function failed");
+            error("alloc memory for `mystrcat` function failed");
         ss[len] = '\0';
         strcat(ss, s);
     }
@@ -48,7 +49,7 @@ char *mystrdup(int argc, const char *str1, ...) {
 }
 
 char *pathcat(char *dir, char *filename) {
-    return mystrdup(3, dir, PATH_DELIMITER, filename);
+    return mystrcat(3, dir, PATH_DELIMITER, filename);
 }
 
 size_t hexprint(void *ptr, size_t length) {
@@ -111,14 +112,14 @@ bool is_tcp(void *ip_packet) {
 }
 
 // packet infomation
-int get_ether_type(const u_char *pcap_packet) {
+int get_ether_type(byte *pcap_packet) {
     return ((int)(pcap_packet[12]) << 8) | (int)pcap_packet[13];
 }
 
 /*
  * @protocol: IPv4 or IPv6
  */
-void *get_ip_header(const u_char *pcap_packet) {
+void *get_ip_header(byte *pcap_packet) {
     int offset;
     switch (get_ether_type(pcap_packet)) {
         case ETHER_TYPE_8021Q: offset = ETHER_OFFSET_8021Q;break;
@@ -128,6 +129,10 @@ void *get_ip_header(const u_char *pcap_packet) {
     }
     //skip past the Ethernet II header
     return (void *)(pcap_packet + offset);
+}
+
+void *get_ip_header_n(HASHNODE *node) {
+    return get_ip_header(((pcap_item *)node->data)->packet);
 }
 
 int get_ip_protocol(void *ip_packet) {
@@ -144,20 +149,25 @@ int get_ip_protocol(void *ip_packet) {
  * @ip_packet: beginning memory address of IP packet, same with IP header
  */
 tcp_hdr *get_tcp_header(void *ip_packet) {
+    tcp_hdr *tcp_packet = NULL;
     int protocol = get_ip_protocol(ip_packet);
     if (is_ip4(protocol))
-        return (tcp_hdr *)((char *)(ip_packet) + _IP4(ip_packet)->ip_hl * 4);
-    // TODO
+        tcp_packet = (tcp_hdr *)((char *)(ip_packet) + _IP4(ip_packet)->ip_hl * 4);
     else
-        return 0;
-    return NULL;
+    // TODO
+        tcp_packet = (tcp_hdr *)(NULL);
+    return tcp_packet;
+}
+
+tcp_hdr *get_tcp_header_p(byte *pcap_packet) {
+    return get_tcp_header(get_ip_header(pcap_packet));
 }
 
 /*
  * return beginning memory address of tcp data
  */
-const char *get_tcp_data(tcp_hdr *tcp_packet) {
-    return (const char *)((char *)(tcp_packet) + tcp_packet->th_off * 4);
+byte *get_tcp_data(tcp_hdr *tcp_packet) {
+    return (byte *)((char *)(tcp_packet) + tcp_packet->th_off * 4);
 }
 
 size_t get_tcp_data_length(void *ip_packet) {
@@ -176,6 +186,14 @@ size_t get_tcp_data_length(void *ip_packet) {
     tcp_header_len = get_tcp_header(ip_packet)->th_off * 4;
 
     return ip_len - (ip_header_len + tcp_header_len);
+}
+
+size_t get_tcp_data_length_p(byte *pcap_packet) {
+    return get_tcp_data_length(get_ip_header(pcap_packet));
+}
+
+size_t get_tcp_data_length_n(HASHNODE *node) {
+    return get_tcp_data_length_p(((pcap_item *)node->data)->packet);
 }
 
 /*
@@ -212,6 +230,13 @@ const char *get_ip_port_pair(void *ip_packet) {
     return (const char *)str;
 }
 
+const char *reverse_ip_port_pair(const char *ip_port_pair) {
+    char *pair2 = strstr(ip_port_pair, "--");
+    char *pair1 = strndup(ip_port_pair, pair2 - ip_port_pair);
+    // 2 is length of "--"
+    return mystrcat(3, pair2 + 2, "--", pair1);
+}
+
 pcap_t *get_pcap_handle(char *filename) {
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t *handle;
@@ -240,14 +265,11 @@ pcap_item *create_pcap_item(const u_char *pcap_packet, struct pcap_pkthdr *pcap_
 /*
  * return a single instance of hash table
  */
+static HASHTBL *_g_hashtbl = NULL;
 HASHTBL *get_hash_table() {
-    static HASHTBL *hashtbl;
-    if(hashtbl == NULL) {
-        hashtbl = hashtbl_create(HASH_SIZE, NULL);
-        if(hashtbl == NULL)
-            error("ERROR: hashtbl_create() failed");
-    }
-    return hashtbl;
+    if(_g_hashtbl == NULL)
+        assert(_g_hashtbl = hashtbl_create(HASH_SIZE, NULL));
+    return _g_hashtbl;
 }
 
 /*
@@ -255,6 +277,7 @@ HASHTBL *get_hash_table() {
  */
 void destory_hash_table() {
     hashtbl_destroy(get_hash_table());
+    _g_hashtbl = NULL;
 }
 
 void free_hash_node(void *ptr) {
@@ -264,29 +287,35 @@ void free_hash_node(void *ptr) {
 }
 
 void remove_hash_nodes(const char *key) {
-    HASHTBL *hashtbl = get_hash_table();
-    hashtbl_remove(hashtbl, key, free_hash_node);
+    hashtbl_remove(get_hash_table(), key, free_hash_node);
+}
+
+int get_hash_index(const char *key) {
+    return hashtbl_index(get_hash_table(), key);
+}
+
+HASHNODE *get_hash_nodes(const char *key) {
+    return hashtbl_get(get_hash_table(), key);
 }
 
 /*
  * use (source ip:port, destination ip:port) as key, hash pcap_item
  */
-const char *insert_hash_node(const u_char *pcap_packet, struct pcap_pkthdr *pcap_header) {
+const char *insert_hash_node(byte *pcap_packet, struct pcap_pkthdr *pcap_header) {
     void *ip_packet = get_ip_header(pcap_packet);
     const char *key = get_ip_port_pair(ip_packet);
     pcap_item *pcap = create_pcap_item(pcap_packet, pcap_header);
 
     if (-1 == hashtbl_insert(get_hash_table(), key, (void *)pcap))
         error("ERROR: insert to hash table failed");
-
     return key;
 }
 
 int cmp_pcap_packet(pcap_item *p1, pcap_item *p2) {
-    const u_char *pck1 = p1->packet;
-    const u_char *pck2 = p2->packet;
-    tcp_hdr *t1 = get_tcp_header(get_ip_header(pck1));
-    tcp_hdr *t2 = get_tcp_header(get_ip_header(pck2));
+    const u_char *packet1 = p1->packet;
+    const u_char *packet2 = p2->packet;
+    tcp_hdr *t1 = get_tcp_header_p(packet1);
+    tcp_hdr *t2 = get_tcp_header_p(packet2);
 
     int diff_seq = ntohl(t1->th_seq) - ntohl(t2->th_seq);
     int diff_ack = ntohl(t1->th_ack) - ntohl(t2->th_ack);
@@ -297,8 +326,8 @@ int cmp_pcap_packet(pcap_item *p1, pcap_item *p2) {
 /*
  * sort pcap packets storging in hash table
  */
-struct hashnode_s *sort_pcap_packets(struct hashnode_s *list) {
-    struct hashnode_s *p, *q, *e, *tail;
+HASHNODE *sort_pcap_packets(HASHNODE *list) {
+    HASHNODE *p, *q, *e, *tail;
     int insize, nmerges, psize, qsize, i;
 
     if (!list)
@@ -368,12 +397,72 @@ struct hashnode_s *sort_pcap_packets(struct hashnode_s *list) {
     }
 }
 
+tcp_hdr *get_tcp_header_n(HASHNODE *node) {
+    return get_tcp_header_p(((pcap_item *)node->data)->packet);
+}
+
+HASHNODE *combine_hash_nodes(const char *key1, const char *key2) {
+    HASHTBL *hashtbl = get_hash_table();
+    hash_size hash1 = get_hash_index(key1);
+    hash_size hash2 = get_hash_index(key2);
+    HASHNODE *node1;
+    HASHNODE *node2;
+
+    // if one nodes is empty, then return another one
+    if (hash1 == -1 || !(node1 = hashtbl->nodes[hash1]))
+        return hashtbl->nodes[hash2];
+    if (hash2 == -1 || !(node2 = hashtbl->nodes[hash2]))
+        return hashtbl->nodes[hash1];
+
+    // make sure of node1 being requester and node2 being responser
+    unsigned char flags = get_tcp_header_n(node1)->th_flags;
+    if ((flags & TH_SYN) && (flags & TH_ACK)) {
+        hash_size tmp = hash1;
+        hash1 = hash2;
+        hash2 = hash1;
+    }
+
+    node2 = hashtbl->nodes[hash2];
+    // exchange seq and ack, and append node2 to node1
+    while (node2) {
+        tcp_hdr *tcp_packet2 = get_tcp_header_n(node2);
+        tcp_seq seq2 = tcp_packet2->th_seq;
+        tcp_seq ack2 = tcp_packet2->th_ack;
+        tcp_packet2->th_seq = ack2;
+        tcp_packet2->th_ack = seq2;
+
+        HASHNODE *next2 = node2->next;
+        node2->next = hashtbl->nodes[hash1];
+        hashtbl->nodes[hash1] = node2;
+        node2 = next2;
+    }
+    hashtbl->nodes[hash2] = NULL;
+
+    node1 = sort_pcap_packets(hashtbl->nodes[hash1]);
+    // recovery seq and ack in original node2
+    while (node1) {
+        void *ip_packet2 = get_ip_header_n(node1);
+        const char *tmp = get_ip_port_pair(ip_packet2);
+        if (!strcmp(key2, tmp)) {
+            tcp_hdr *tcp_packet2 = get_tcp_header(ip_packet2);
+            tcp_seq seq2 = tcp_packet2->th_seq;
+            tcp_seq ack2 = tcp_packet2->th_ack;
+            tcp_packet2->th_seq = ack2;
+            tcp_packet2->th_ack = seq2;
+        }
+        node1 = node1->next;
+        free((void *)tmp);
+    }
+
+    return hashtbl->nodes[hash1];
+}
+
 // file operation
 /*
  * write pcap packet to pcap file
  */
-void write_pcap_to_file(pcap_t *handle, struct hashnode_s *node) {
-    const char *filename = pathcat(PCAP_DIR, mystrdup(2, node->key, ".pcap"));
+void write_pcap_to_file(pcap_t *handle, HASHNODE *node) {
+    const char *filename = pathcat(PCAP_DIR, mystrcat(2, node->key, ".pcap"));
 
     pcap_dumper_t *pd;
     if (!(pd = pcap_dump_open(handle, filename)))
@@ -394,56 +483,77 @@ void write_pcap_to_file(pcap_t *handle, struct hashnode_s *node) {
 void write_pcaps_to_files(pcap_t *handle) {
     HASHTBL *hashtbl = get_hash_table();
 
-    for (int i = 0; i < HASH_SIZE; i++) {
+    for (int i = 0; i < hashtbl->size; i++) {
         if (!hashtbl->nodes[i])
             continue;
         hashtbl->nodes[i] = sort_pcap_packets(hashtbl->nodes[i]);
         write_pcap_to_file(handle, hashtbl->nodes[i]);
-        remove_hash_nodes(hashtbl->nodes[i]->key);
     }
+    destory_hash_table();
 }
 
 /*
  * write tcp data (maybe contains HTTP request and response) to txt file
  */
-size_t write_tcp_data_to_file(FILE *fp, const u_char *pcap_packet) {
-    void *ip_packet = get_ip_header(pcap_packet);
-    int protocol = get_ip_protocol(ip_packet);
-    tcp_hdr *tcp_packet = get_tcp_header(ip_packet);
-    size_t data_len = get_tcp_data_length(ip_packet);
-    const char *data_ptr = get_tcp_data(tcp_packet);
-
+size_t write_tcp_data_to_file(FILE *fp, byte *data_ptr, size_t data_len) {
     if (data_len && data_len != fwrite(data_ptr, 1, data_len, fp))
         error("write wrong size of tcp data to file\n");
     return data_len;
 }
 
+size_t write_tcp_data_to_file_n(FILE *fp, HASHNODE *node) {
+    void *ip_packet = get_ip_header_n(node);
+    tcp_hdr *tcp_packet = get_tcp_header(ip_packet);
+    size_t data_len = get_tcp_data_length(ip_packet);
+    byte *data_ptr = get_tcp_data(tcp_packet);
+    return write_tcp_data_to_file(fp, data_ptr, data_len);
+}
+
 void write_http_pairs_to_files() {
+    // read pcap files to memory
     DIR *dir;
     struct dirent *ent;
     if (!(dir = opendir(PCAP_DIR)))
         error("open directory '" PCAP_DIR "' failed\n");
-
     while ((ent = readdir(dir)) != NULL) {
+        // deal with filename
         char *filename = ent->d_name;
         if (!is_pcap_file(filename))
             continue;
-        filename = pathcat(REQS_DIR, mystrdup(2, filename, ".txt"));
+        char *pcap_filename = pathcat(PCAP_DIR, filename);
 
         const u_char *pcap_packet;
         struct pcap_pkthdr header;
-        char *pcap_filename = pathcat(PCAP_DIR, ent->d_name);
-
         pcap_t *handle = get_pcap_handle(pcap_filename);
-        FILE *fp = fopen(filename, "wb");
         while (NULL != (pcap_packet = pcap_next(handle, &header)))
-            write_tcp_data_to_file(fp, pcap_packet);
+            insert_hash_node(pcap_packet, &header);
 
-        fclose(fp);
         pcap_close(handle);
         free(pcap_filename);
     }
     closedir(dir);
+
+    // write http requests and responses
+    HASHTBL *hashtbl = get_hash_table();
+    for (int i = 0; i < hashtbl->size; i++) {
+        HASHNODE *node1 = hashtbl->nodes[i];
+        if (!node1)
+            continue;
+
+        const char *key1 = node1->key;
+        const char *key2 = reverse_ip_port_pair(key1);
+        char *filename = pathcat(REQS_DIR, mystrcat(2, key1, ".txt"));
+        // combin two direction ip:port pair and write to file
+        node1 = combine_hash_nodes(key1, key2);
+        FILE *fp = fopen(filename, "wb");
+        while (node1) {
+            write_tcp_data_to_file_n(fp, node1);
+            node1 = node1->next;
+        }
+        fclose(fp);
+        free(filename);
+        remove_hash_nodes(key1);
+    }
 }
 
 
@@ -456,12 +566,13 @@ void init_environment(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
+    argc = 2;
     const u_char *pcap_packet;
     struct pcap_pkthdr header;
     pcap_t *handle;
 
     init_environment(argc, argv);
-    handle = get_pcap_handle(argv[1]);
+    handle = get_pcap_handle("/Users/fz/Documents/codes/c/tcp-reassembler/test.pcap");
 
     while (NULL != (pcap_packet = pcap_next(handle, &header))) {
         void *ip_packet = get_ip_header(pcap_packet);

@@ -30,23 +30,24 @@
 #define FALSE 0
 
 #define PCAP_DIR "pcaps"
-#define REQS_DIR "https"
+#define REQS_DIR "requests"
 #define HTTP_DIR "files"
 
-#define HASH_SIZE 100
+#define HASH_SIZE 1000
 // function
 #define _IP4(x) ((ip4_hdr *)(x))
 #define _IP6(x) ((ip6_hdr *)(x))
 
 
 typedef int bool;
+typedef const unsigned char byte;
 typedef struct ip ip4_hdr;
 typedef struct ip6_hdr ip6_hdr;
 typedef struct tcphdr tcp_hdr;
 typedef char http_hdr;
 typedef struct {
     struct pcap_pkthdr header;
-    const u_char *packet;
+    byte *packet;
 } pcap_item;
 
 
