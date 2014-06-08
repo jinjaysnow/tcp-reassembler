@@ -33,7 +33,7 @@
 #define REQS_DIR "requests"
 #define HTTP_DIR "files"
 
-#define HASH_SIZE 1000
+#define HASH_SIZE 2000
 // function
 #define _IP4(x) ((ip4_hdr *)(x))
 #define _IP6(x) ((ip6_hdr *)(x))

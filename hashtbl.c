@@ -1,23 +1,8 @@
-/* The authors of this work have released all rights to it and placed it
-in the public domain under the Creative Commons CC0 1.0 waiver
-(http://creativecommons.org/publicdomain/zero/1.0/).
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-Retrieved from: http://en.literateprograms.org/Hash_table_(C)?oldid=19620
-*/
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
 #include "hashtbl.h"
 
-#define REHASH_COUNT 3
 
 static char *mystrdup(const char *s)
 {
@@ -58,6 +43,15 @@ size_t hashtbl_capacity(HASHTBL *hashtbl)
     {
         if (hashtbl->nodes[i])
             count++;
+    }
+    return count;
+}
+
+size_t hashtbl_nodes_length(HASHNODE *node) {
+    int count = 0;
+    while (node) {
+        count++;
+        node = node->next;
     }
     return count;
 }

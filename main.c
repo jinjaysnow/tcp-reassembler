@@ -105,9 +105,17 @@ bool is_tcp(void *ip_packet) {
     int protocol = get_ip_protocol(ip_packet);
     if (is_ip4(protocol))
         return _IP4(ip_packet)->ip_p == PROTOCOL_TCP;
-    // TODO
     else if (is_ip6(protocol))
-        return 0;
+        return _IP6(ip_packet)->ip6_nxt == PROTOCOL_TCP;
+    return FALSE;
+}
+
+bool is_udp(void *ip_packet) {
+    int protocol = get_ip_protocol(ip_packet);
+    if (is_ip4(protocol))
+        return _IP4(ip_packet)->ip_p == PROTOCOL_UDP;
+    else if (is_ip6(protocol))
+        return _IP6(ip_packet)->ip6_nxt == PROTOCOL_UDP;
     return FALSE;
 }
 
@@ -153,9 +161,9 @@ tcp_hdr *get_tcp_header(void *ip_packet) {
     int protocol = get_ip_protocol(ip_packet);
     if (is_ip4(protocol))
         tcp_packet = (tcp_hdr *)((char *)(ip_packet) + _IP4(ip_packet)->ip_hl * 4);
-    else
-    // TODO
-        tcp_packet = (tcp_hdr *)(NULL);
+    else if (is_ip6(protocol))
+        // 40 is IPv6 header length
+        tcp_packet = (tcp_hdr *)((char *)(ip_packet) + 40);
     return tcp_packet;
 }
 
@@ -171,18 +179,18 @@ byte *get_tcp_data(tcp_hdr *tcp_packet) {
 }
 
 size_t get_tcp_data_length(void *ip_packet) {
-    size_t ip_len;
-    size_t ip_header_len;
-    size_t tcp_header_len;
+    size_t ip_len = 0;
+    size_t ip_header_len = 0;
+    size_t tcp_header_len = 0;
     int protocol = get_ip_protocol(ip_packet);
 
     if (is_ip4(protocol)) {
         ip_header_len = _IP4(ip_packet)->ip_hl * 4;
         ip_len = ntohs(_IP4(ip_packet)->ip_len);
-        // `th_off` specifies the size of the TCP header in 32-bit words
     } else {
-        // TODO
+        ip_len = ntohs(_IP6(ip_packet)->ip6_plen);
     }
+    // `th_off` specifies the size of the TCP header in 32-bit words
     tcp_header_len = get_tcp_header(ip_packet)->th_off * 4;
 
     return ip_len - (ip_header_len + tcp_header_len);
@@ -211,7 +219,8 @@ const char *get_ip_port_pair(void *ip_packet) {
         ip_dst = &_IP4(ip_packet)->ip_dst;
     } else {
         addr_len = INET6_ADDRSTRLEN;
-        // TODO
+        ip_src = &_IP6(ip_packet)->ip6_src;
+        ip_dst = &_IP6(ip_packet)->ip6_dst;
     }
 
     char buf_src[INET6_ADDRSTRLEN];
@@ -438,7 +447,7 @@ HASHNODE *combine_hash_nodes(const char *key1, const char *key2) {
     }
     hashtbl->nodes[hash2] = NULL;
 
-    node1 = sort_pcap_packets(hashtbl->nodes[hash1]);
+    hashtbl->nodes[hash1] = node1 = sort_pcap_packets(hashtbl->nodes[hash1]);
     // recovery seq and ack in original node2
     while (node1) {
         void *ip_packet2 = get_ip_header_n(node1);
@@ -565,23 +574,31 @@ void init_environment(int argc, char **argv) {
     mkdir(HTTP_DIR, 0754);
 }
 
+#define DEBUG
 int main(int argc, char **argv) {
-    argc = 2;
     const u_char *pcap_packet;
     struct pcap_pkthdr header;
     pcap_t *handle;
 
+#ifdef DEBUG
+    argc = 2;
+#endif
     init_environment(argc, argv);
+#ifdef DEBUG
     handle = get_pcap_handle("/Users/fz/Documents/codes/c/tcp-reassembler/test.pcap");
+#else
+    handle = get_pcap_handle(argv[1]);
+#endif
 
     while (NULL != (pcap_packet = pcap_next(handle, &header))) {
         void *ip_packet = get_ip_header(pcap_packet);
         // skip if neither IPv4 nor IPv6
         if (NULL == ip_packet)
             continue;
-        // TODO: deal with UDP
         if (is_tcp(ip_packet)) {
             insert_hash_node(pcap_packet, &header);
+        } else if (is_udp(ip_packet)) {
+            // TODO: deal with UDP
         }
     }
 
