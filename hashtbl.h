@@ -38,7 +38,7 @@ HASHTBL *hashtbl_create(hash_size size, hash_size (*hashfunc)(const char *));
 void hashtbl_destroy(HASHTBL *hashtbl);
 int hashtbl_index(HASHTBL *hashtbl, const char *key);
 HASHNODE *hashtbl_get(HASHTBL *hashtbl, const char *key);
-int hashtbl_insert(HASHTBL *hashtbl, const char *key, void *data);
+hash_size hashtbl_insert(HASHTBL *hashtbl, const char *key, void *data);
 void hashtbl_remove_n(HASHNODE *node, int count, void (*data_free_func)(void *));
 void hashtbl_remove(HASHTBL *hashtbl, const char *key, void (*data_free_func)(void *));
 

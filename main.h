@@ -22,14 +22,6 @@
 #define PROTOCOL_TCP 0x06
 #define PROTOCOL_UDP 0x11
 // constant
-#define PATH_DELIMITER "/"
-#ifndef __FILE__
-#define __FILE__ "main"
-#endif /* __FILE__ */
-#define TRUE 1
-#define FALSE 0
-#define CR 0x0D
-#define LF 0x0A
 // use 0D0A0D0A0D0A as delimiter
 #define REQUEST_GAP "\r\n\r\n\r\n"
 
@@ -43,8 +35,6 @@
 #define _IP6(x) ((ip6_hdr *)(x))
 
 
-typedef int bool;
-typedef const unsigned char byte;
 typedef struct ip ip4_hdr;
 typedef struct ip6_hdr ip6_hdr;
 typedef struct tcphdr tcp_hdr;

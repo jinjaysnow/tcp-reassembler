@@ -1,16 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+#include "util.h"
 #include "hashtbl.h"
-
-
-static char *mystrdup(const char *s)
-{
-    char *b;
-    if (!(b = malloc(strlen(s) + 1))) return NULL;
-    strcpy(b, s);
-    return b;
-}
 
 static hash_size def_hashfunc(const char *key)
 {
@@ -27,8 +19,8 @@ HASHTBL *hashtbl_create(hash_size size, hash_size (*hashfunc)(const char *))
 {
     HASHTBL *hashtbl;
 
-    assert(hashtbl = malloc(sizeof(HASHTBL)));
-    assert(hashtbl->nodes = calloc(size, sizeof(struct hashnode_s *)));
+    hashtbl = mymalloc(sizeof(HASHTBL));
+    hashtbl->nodes = mycalloc(size, sizeof(struct hashnode_s *));
 
     hashtbl->size = size;
     hashtbl->hashfunc = hashfunc ? hashfunc : def_hashfunc;
@@ -47,9 +39,11 @@ size_t hashtbl_capacity(HASHTBL *hashtbl)
     return count;
 }
 
-size_t hashtbl_nodes_length(HASHNODE *node) {
+size_t hashtbl_nodes_length(HASHNODE *node)
+{
     int count = 0;
-    while (node) {
+    while (node)
+    {
         count++;
         node = node->next;
     }
@@ -59,7 +53,7 @@ size_t hashtbl_nodes_length(HASHNODE *node) {
 void hashtbl_destroy(HASHTBL *hashtbl)
 {
     hash_size n;
-    struct hashnode_s *node, *oldnode;
+    struct hashnode_s *node;
 
     for (n = 0; n < hashtbl->size; ++n)
     {
@@ -77,7 +71,7 @@ int hashtbl_index(HASHTBL *hashtbl, const char *key)
     HASHNODE *node = hashtbl->nodes[hash];
 
     if (node && !strcmp(node->key, key))
-        return hash;
+        return (int)hash;
     return -1;
 }
 
@@ -94,19 +88,22 @@ void hashtbl_rehash(HASHTBL *hashtbl)
     HASHNODE **oldnodes = hashtbl->nodes;
     HASHNODE **newnodes;
     hash_size newsize = 2 * hashtbl->size;
-    assert(newnodes = calloc(newsize, sizeof(HASHNODE *)));
+    assert(newnodes = mycalloc(newsize, sizeof(HASHNODE *)));
 
     for (int i = 0; i < hashtbl->size; i++)
     {
         if (!oldnodes[i])
             continue;
         hash_size hash = hashtbl->hashfunc(oldnodes[i]->key) % newsize;
-        if (newnodes[hash]) {
+        if (newnodes[hash])
+        {
             i = -1;
             newsize *= 2;
             free(newnodes);
-            assert(newnodes = calloc(newsize, sizeof(HASHNODE *)));
-        } else {
+            assert(newnodes = mycalloc(newsize, sizeof(HASHNODE *)));
+        }
+        else
+        {
             newnodes[hash] = oldnodes[i];
         }
     }
@@ -115,7 +112,7 @@ void hashtbl_rehash(HASHTBL *hashtbl)
     free(oldnodes);
 }
 
-int hashtbl_insert(HASHTBL *hashtbl, const char *key, void *data)
+hash_size hashtbl_insert(HASHTBL *hashtbl, const char *key, void *data)
 {
     hash_size hash = hashtbl->hashfunc(key) % hashtbl->size;
     struct hashnode_s *node = hashtbl->nodes[hash];
@@ -129,8 +126,8 @@ int hashtbl_insert(HASHTBL *hashtbl, const char *key, void *data)
         node = hashtbl->nodes[hash];
     }
 
-    assert(node = malloc(sizeof(struct hashnode_s)));
-    assert(node->key = mystrdup(key));
+    node = mymalloc(sizeof(struct hashnode_s));
+    node->key = mystrdup(key);
 
     node->data = data;
     node->next = hashtbl->nodes[hash];
