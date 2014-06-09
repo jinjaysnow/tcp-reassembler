@@ -1,13 +1,22 @@
 all: main
 
-main: main.o hashtbl.o 
-	cc -o main hashtbl.o main.o -lpcap -Wall
+main: main.o hashtbl.o http_parser.o
+	cc -o main http_parser.o hashtbl.o main.o -lpcap -Wall
+
+http_parser.o: http_parser.c http_parser.h
+	cc -o http_parser.o -c http_parser.c 
 
 hashtbl.o: hashtbl.c hashtbl.h
 	cc -o hashtbl.o -c hashtbl.c 
 
 main.o: main.c main.h hashtbl.h 
 	cc -o main.o -c main.c -g
+
+test: test.o http_parser.o
+	cc -o test http_parser.o test.o && ./test
+
+test.o: test.c http_parser.h
+	cc -o test.o -c test.c
 
 clean:
 	rm -rf *.o main a.out pcaps requests files

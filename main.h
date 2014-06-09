@@ -28,6 +28,10 @@
 #endif /* __FILE__ */
 #define TRUE 1
 #define FALSE 0
+#define CR 0x0D
+#define LF 0x0A
+// use 0D0A0D0A0D0A as delimiter
+#define REQUEST_GAP "\r\n\r\n\r\n"
 
 #define PCAP_DIR "pcaps"
 #define REQS_DIR "requests"

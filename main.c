@@ -16,6 +16,7 @@
 #include <assert.h>
 #include <dirent.h>
 #include "hashtbl.h"
+#include "http_parser.h"
 #include "main.h"
 
 // my custom function
@@ -89,6 +90,15 @@ bool is_pcap_file(const char *filename) {
     return TRUE;
 }
 
+bool is_txt_file(const char *filename) {
+    const char *sub = strrchr(filename, '.');
+    if (sub == NULL)
+        return FALSE;
+    if (strcmp(sub, ".txt"))
+        return FALSE;
+    return TRUE;
+}
+
 bool is_ip4(int protocol) {
     return protocol == PROTOCOL_IP4;
 }
@@ -123,7 +133,7 @@ bool is_udp(void *ip_packet) {
 int get_ether_type(byte *pcap_packet) {
     return ((int)(pcap_packet[12]) << 8) | (int)pcap_packet[13];
 }
-
+// IP
 /*
  * @protocol: IPv4 or IPv6
  */
@@ -153,6 +163,7 @@ int get_ip_protocol(void *ip_packet) {
     return 4 == version ? PROTOCOL_IP4 : PROTOCOL_IP6;
 }
 
+// TCP
 /*
  * @ip_packet: beginning memory address of IP packet, same with IP header
  */
@@ -202,6 +213,14 @@ size_t get_tcp_data_length_p(byte *pcap_packet) {
 
 size_t get_tcp_data_length_n(HASHNODE *node) {
     return get_tcp_data_length_p(((pcap_item *)node->data)->packet);
+}
+
+bool is_tcp_syn(tcp_hdr *tcp_packet) {
+    return tcp_packet->th_flags & TH_SYN;
+}
+
+bool is_tcp_fin(tcp_hdr *tcp_packet) {
+    return tcp_packet->th_flags & TH_FIN;
 }
 
 /*
@@ -466,6 +485,31 @@ HASHNODE *combine_hash_nodes(const char *key1, const char *key2) {
     return hashtbl->nodes[hash1];
 }
 
+HASHNODE *combine_tcp_packet(hash_size index) {
+    HASHTBL *hashtbl = get_hash_table();
+    HASHNODE *node = hashtbl->nodes[index];
+    HASHNODE *prev = node;
+    HASHNODE *next;
+
+    while (node) {
+        next = node->next;
+        // if no data, then skip it
+        if (!get_tcp_data_length_n(node)) {
+            if (hashtbl->nodes[index] == node)
+                hashtbl->nodes[index] = next;
+            else
+                prev->next = next;
+            free(node->key);
+            free_hash_node(node->data);
+            free(node);
+        } else {
+            prev = node;
+        }
+        node = next;
+    }
+
+    return hashtbl->nodes[index];
+}
 // file operation
 /*
  * write pcap packet to pcap file
@@ -518,7 +562,7 @@ size_t write_tcp_data_to_file_n(FILE *fp, HASHNODE *node) {
     return write_tcp_data_to_file(fp, data_ptr, data_len);
 }
 
-void write_http_pairs_to_files() {
+void write_http_data_to_files() {
     // read pcap files to memory
     DIR *dir;
     struct dirent *ent;
@@ -551,12 +595,18 @@ void write_http_pairs_to_files() {
 
         const char *key1 = node1->key;
         const char *key2 = reverse_ip_port_pair(key1);
-        char *filename = pathcat(REQS_DIR, mystrcat(2, key1, ".txt"));
         // combin two direction ip:port pair and write to file
         node1 = combine_hash_nodes(key1, key2);
+        // delete all nodes having no data
+        node1 = combine_tcp_packet(get_hash_index(node1->key));
+        // skip empty file
+        if (!node1)
+            continue;
+        char *filename = pathcat(REQS_DIR, mystrcat(2, node1->key, ".txt"));
         FILE *fp = fopen(filename, "wb");
         while (node1) {
-            write_tcp_data_to_file_n(fp, node1);
+            if (write_tcp_data_to_file_n(fp, node1) && node1->next)
+                fwrite(REQUEST_GAP, 1, 4, fp);
             node1 = node1->next;
         }
         fclose(fp);
@@ -565,6 +615,66 @@ void write_http_pairs_to_files() {
     }
 }
 
+// HTTP parse
+int on_body(http_parser* _, const char* at, size_t length) {
+  (void)_;
+  printf("Body: %.*s\n", (int)length, at);
+  return 0;
+}
+
+void http_file_parse(const char *filename) {
+    // init http parser
+    http_parser_settings settings;
+    memset(&settings, 0, sizeof(settings));
+    settings.on_body = on_body;
+    http_parser parser;
+    http_parser_init(&parser, HTTP_BOTH);
+    // http_parser_init(&parser, HTTP_REQUEST);
+
+    // read file into memory
+    char* data;
+    FILE *fp = fopen(filename, "rb");
+    fseek(fp, 0, SEEK_END);
+    long file_length = ftell(fp);
+    if (file_length == -1)
+        error("call ftell failed\n");
+    data = malloc(file_length);
+    fseek(fp, 0, SEEK_SET);
+    if (fread(data, 1, file_length, fp) != (size_t)file_length) {
+        free(data);
+        error("couldn't read entire file\n");
+    }
+    fclose(fp);
+
+    size_t nparsed = http_parser_execute(&parser, &settings, data, file_length);
+    if (nparsed != (size_t)file_length) {
+        free(data);
+        error("%s: %s (%s)\n",
+              filename,
+              http_errno_description(HTTP_PARSER_ERRNO(&parser)),
+              http_errno_name(HTTP_PARSER_ERRNO(&parser)));
+    }
+    free(data);
+}
+
+// END TODO
+void parse_http_files() {
+    DIR *dir;
+    struct dirent *ent;
+    if (!(dir = opendir(REQS_DIR)))
+        error("open directory '" REQS_DIR "' failed\n");
+    while ((ent = readdir(dir)) != NULL) {
+        // deal with filename
+        char *filename = ent->d_name;
+        if (!is_txt_file(filename))
+            continue;
+        // filename = pathcat(REQS_DIR, filename);
+        filename = "/Users/fz/Documents/codes/c/tcp-reassembler/requests/test.txt";
+        http_file_parse(filename);
+        // free(filename);
+    }
+    closedir(dir);
+}
 
 void init_environment(int argc, char **argv) {
     if (argc < 2)
@@ -603,9 +713,11 @@ int main(int argc, char **argv) {
     }
 
     write_pcaps_to_files(handle);
-    write_http_pairs_to_files();
-
+    write_http_data_to_files();
     destory_hash_table();
+
+    parse_http_files();
+
     pcap_close(handle);
     return 0;
 }
