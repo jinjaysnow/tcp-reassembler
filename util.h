@@ -18,6 +18,9 @@
 typedef int bool;
 typedef const unsigned char byte;
 
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+
 void *mymalloc(size_t size);
 void *mycalloc(size_t count, size_t size);
 

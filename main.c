@@ -454,8 +454,8 @@ HASHNODE *combine_tcp_packet(hash_size index) {
 
     while (node) {
         next = node->next;
-        // if no data, then skip it
-        if (!get_tcp_data_length_n(node)) {
+        // if no data, then skip node
+        if (0 == get_tcp_data_length_n(node)) {
             if (hashtbl->nodes[index] == node)
                 hashtbl->nodes[index] = next;
             else
@@ -665,16 +665,14 @@ void write_http_data_to_file(const char *filename) {
     size_t data_len;
     read_file_into_memory(fp, data, data_len);
 
-    const char *begin = data;
-    const char *end;
-    // count CR LF number
-    unsigned long crlf_count = 0;
-
     // init http parser
     http_parser_settings settings;
     http_parser parser;
     _init_http_info();
 
+    const char *begin = data;
+    const char *end;
+    const char *ptr;
 
     do {
         if (!data_len)
@@ -684,11 +682,9 @@ void write_http_data_to_file(const char *filename) {
         size_t token_len = (end == NULL) ? (data + data_len - begin) : (end - begin);
         void *token = mymalloc(token_len);
         memcpy(token, begin, token_len);
-        begin = end + REQUEST_GAP_LEN;
-        while (end && (*begin == '\r' || *begin == '\n'))
-            begin++;
+        ptr = begin;
 
-        // http parse
+        // set callback function and execute http parse
         memset(&settings, 0, sizeof(settings));
         settings.on_url = _on_url;
         settings.on_body = _on_body;
@@ -696,20 +692,32 @@ void write_http_data_to_file(const char *filename) {
         settings.on_header_value = _on_header_value;
         http_parser_init(&parser, _g_http.on_request ? HTTP_REQUEST : HTTP_RESPONSE);
         size_t nparsed = http_parser_execute(&parser, &settings, token, token_len);
-        if (nparsed != token_len) {
-            // printf("%s: %s (%s)\n",
-            //        filename,
-            //        http_errno_description(HTTP_PARSER_ERRNO(&parser)),
-            //        http_errno_name(HTTP_PARSER_ERRNO(&parser)));
-        }
         free(token);
+
+        if (nparsed != token_len) {
+            // pretty debug log
+            printf("\x1b[33m%s\x1b[0m: \x1b[31m%s\x1b[0m\n\x1b[32m[0x%08X]:\x1b[0m %.*s\n\n",
+                   filename,
+                   http_errno_description(HTTP_PARSER_ERRNO(&parser)),
+                   // bytes offset in file
+                   (unsigned int)(begin + nparsed - data),
+                   (int)MIN(token_len - nparsed, 50), begin + nparsed);
+        }
+        // move begin cursor to next scan
+        ptr += nparsed;
+        begin = end + REQUEST_GAP_LEN;
+        while (end && (*begin == '\r' || *begin == '\n'))
+            begin++;
+        begin = MAX(begin, ptr);
+
+        // update _g_http state
         if (!_g_http.on_request) {
             write_http_info_to_file();
             _free_http_info();
             _init_http_info();
         }
         _g_http.on_request = !_g_http.on_request;
-    } while (end);
+    } while (end && (begin < data + data_len));
 
     free(data);
     _free_http_info();

@@ -2,7 +2,7 @@
 * @Author: fz
 * @Date:   2014-06-09 19:17:17
 * @Last Modified by:   fz
-* @Last Modified time: 2014-06-10 14:44:05
+* @Last Modified time: 2014-06-10 20:31:21
 */
 
 #include "util.h"
@@ -54,11 +54,12 @@ char *mystrdup(const char *s)
 
 void error(const char *format, ...)
 {
+    printf("\x1b[31m");
     va_list args;
     va_start(args, format);
     vfprintf(stderr, format, args);
     va_end(args);
-    printf("\n");
+    printf("\x1b[0m\n");
     exit(EXIT_FAILURE);
 }
 
