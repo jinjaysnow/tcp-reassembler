@@ -743,7 +743,7 @@ void init_environment(int argc, char **argv) {
     mkdir(HTTP_DIR, 0754);
 }
 
-#define DEBUG
+// #define DEBUG
 int main(int argc, char **argv) {
     const u_char *pcap_packet;
     struct pcap_pkthdr header;
@@ -755,7 +755,7 @@ int main(int argc, char **argv) {
     init_environment(argc, argv);
 #ifdef DEBUG
     // handle = get_pcap_handle("/Users/fz/Downloads/test.pcap");
-    handle = get_pcap_handle("/Users/fz/Downloads/test2.pcap");
+    handle = get_pcap_handle("hust.pcap");
     // handle = get_pcap_handle("/Users/fz/Downloads/normal.pcap");
     // handle = get_pcap_handle("/Users/fz/Downloads/wifi.pcap");
 #else
