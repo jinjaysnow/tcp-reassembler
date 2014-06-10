@@ -1,11 +1,26 @@
-/*
-* @Author: fz
-* @Date:   2014-06-09 19:17:17
-* @Last Modified by:   fz
-* @Last Modified time: 2014-06-10 20:31:21
-*/
-
 #include "util.h"
+
+
+void *mymemmem(const void *haystack, size_t haystacklen, const void *needle, size_t needlelen) {
+    const char *ptr = (const char *)haystack;
+    const char *end = (const char *)haystack + haystacklen - needlelen + 1;
+    const char firstch = *(const char *)needle;
+    size_t count;
+
+    while (ptr < end) {
+        ptr = memchr(ptr, firstch, end - ptr);
+        if (!ptr)
+            return NULL;
+        count = 0;
+        while (count != needlelen && *(ptr + count) == *((const char *)needle + count))
+            count++;
+        if (count == needlelen)
+            return (void *)ptr;
+        ptr += count;
+    }
+
+    return NULL;
+}
 
 void *mymalloc(size_t size)
 {

@@ -21,6 +21,7 @@ typedef const unsigned char byte;
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
+void *mymemmem(const void *haystack, size_t haystacklen, const void *needle, size_t needlelen);
 void *mymalloc(size_t size);
 void *mycalloc(size_t count, size_t size);
 

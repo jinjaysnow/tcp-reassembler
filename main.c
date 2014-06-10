@@ -576,7 +576,7 @@ void _init_http_info() {
     _g_http.on_request = TRUE;
 }
 
-void _free_http_info() {
+void _reset_http_info() {
     if (_g_http.content_type)
         free(_g_http.content_type);
     if (_g_http.url)
@@ -586,6 +586,9 @@ void _free_http_info() {
     _g_http.content_type = NULL;
     _g_http.url = NULL;
     _g_http.data = NULL;
+    _g_http.on_content_type = FALSE;
+    _g_http.on_content_encoding = FALSE;
+    _g_http.is_gzip_encoding = FALSE;
 }
 
 void _set_content_type(const char *at, size_t length) {
@@ -673,14 +676,21 @@ void write_http_data_to_file(const char *filename) {
     const char *begin = data;
     const char *end;
     const char *ptr;
+    void *token;
+    size_t left_len;
+    size_t token_len;
+
+#undef DEBUG
 
     do {
         if (!data_len)
             break;
         // get a request or response string
-        end = strstr(begin, REQUEST_GAP);
-        size_t token_len = (end == NULL) ? (data + data_len - begin) : (end - begin);
-        void *token = mymalloc(token_len);
+        left_len = data + data_len - begin;
+        end = (const char *)mymemmem(begin, left_len, REQUEST_GAP, REQUEST_GAP_LEN);
+        // printf("%.*s\n", 4, strchr(begin, '\r'));
+        token_len = (end == NULL) ? (left_len) : (end - begin);
+        token = mymalloc(token_len);
         memcpy(token, begin, token_len);
         ptr = begin;
 
@@ -690,11 +700,12 @@ void write_http_data_to_file(const char *filename) {
         settings.on_body = _on_body;
         settings.on_header_field = _on_header_field;
         settings.on_header_value = _on_header_value;
-        http_parser_init(&parser, _g_http.on_request ? HTTP_REQUEST : HTTP_RESPONSE);
+        http_parser_init(&parser, HTTP_BOTH);
         size_t nparsed = http_parser_execute(&parser, &settings, token, token_len);
         free(token);
 
         if (nparsed != token_len) {
+            #ifdef DEBUG
             // pretty debug log
             printf("\x1b[33m%s\x1b[0m: \x1b[31m%s\x1b[0m\n\x1b[32m[0x%08X]:\x1b[0m %.*s\n\n",
                    filename,
@@ -702,10 +713,12 @@ void write_http_data_to_file(const char *filename) {
                    // bytes offset in file
                    (unsigned int)(begin + nparsed - data),
                    (int)MIN(token_len - nparsed, 50), begin + nparsed);
+            #endif /* DEBUG */
         }
         // move begin cursor to next scan
         ptr += nparsed;
         begin = end + REQUEST_GAP_LEN;
+        // skip '\r\n' in http request or response
         while (end && (*begin == '\r' || *begin == '\n'))
             begin++;
         begin = MAX(begin, ptr);
@@ -713,14 +726,13 @@ void write_http_data_to_file(const char *filename) {
         // update _g_http state
         if (!_g_http.on_request) {
             write_http_info_to_file();
-            _free_http_info();
-            _init_http_info();
+            _reset_http_info();
         }
         _g_http.on_request = !_g_http.on_request;
-    } while (end && (begin < data + data_len));
+    } while (end && left_len > 0);
 
     free(data);
-    _free_http_info();
+    _reset_http_info();
 }
 
 #undef read_file_into_memory
@@ -735,6 +747,7 @@ void write_http_data_to_files() {
         const char *filename = ent->d_name;
         if (!is_txt_file(filename))
             continue;
+        // filename = "222.20.59.229.48995--101.227.131.102.80.txt";
         filename = pathcat(REQS_DIR, filename);
         write_http_data_to_file(filename);
         free((void *)filename);
