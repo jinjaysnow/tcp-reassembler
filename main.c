@@ -11,6 +11,7 @@
  */
 #include <stdio.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include "util.h"
 #include "hashtbl.h"
 #include "http_parser.h"
@@ -92,6 +93,15 @@ int get_ip_protocol(void *ip_packet) {
     return 4 == version ? PROTOCOL_IP4 : PROTOCOL_IP6;
 }
 
+unsigned short get_ip_id(void *ip_packet) {
+    int protocol = get_ip_protocol(ip_packet);
+    if (is_ip4(protocol))
+        return ntohs(_IP4(ip_packet)->ip_id);
+    return 0;
+}
+
+#define get_ip_id_n(node) get_ip_id(get_ip_header_n(node))
+
 // TCP
 /*
  * @ip_packet: beginning memory address of IP packet, same with IP header
@@ -115,6 +125,8 @@ tcp_hdr *get_tcp_header(void *ip_packet) {
  * return beginning memory address of tcp data
  */
 #define get_tcp_data(tcp_packet) (byte *)((char *)(tcp_packet) + tcp_packet->th_off * 4)
+
+#define get_tcp_data_n(node) (byte *)((char *)(get_tcp_header_n(node)) + get_tcp_header_n(node)->th_off * 4)
 
 size_t get_tcp_data_length(void *ip_packet) {
     size_t ip_len = 0;
@@ -184,30 +196,6 @@ const char *reverse_ip_port_pair(const char *ip_port_pair) {
     return mystrcat(3, pair2 + 2, "--", pair1);
 }
 
-pcap_t *get_pcap_handle(char *filename) {
-    char errbuf[PCAP_ERRBUF_SIZE];
-    pcap_t *handle;
-
-    if (!(handle = pcap_open_offline(filename, errbuf)))
-        error("Couldn't open pcap file %s: %s", filename, errbuf);
-    return handle;
-}
-
-/*
- * a pcap item contains a pcap header and a pointer of beignning of packet
- */
-pcap_item *create_pcap_item(const u_char *pcap_packet, struct pcap_pkthdr *pcap_header) {
-    size_t pcap_len = pcap_header->caplen;
-    u_char *tmp_packet = mymalloc(pcap_len);
-    memcpy(tmp_packet, pcap_packet, pcap_len);
-
-    pcap_item *pcap = mymalloc(sizeof(pcap_item));
-    pcap->header = *pcap_header;
-    pcap->packet = tmp_packet;
-
-    return pcap;
-}
-
 // hash operation
 /*
  * return a single instance of hash table
@@ -233,11 +221,28 @@ void free_hash_node(void *ptr) {
     free((void *)pcap);
 }
 
+#define remove_hash_node(node) hashtbl_remove_n(node, 1, free_hash_node)
+
 #define remove_hash_nodes(key) hashtbl_remove(get_hash_table(), key, free_hash_node)
 
 #define get_hash_index(key) hashtbl_index(get_hash_table(), key)
 
 #define get_hash_nodes(key) hashtbl_get(get_hash_table(), key)
+
+/*
+ * a pcap item contains a pcap header and a pointer of beignning of packet
+ */
+pcap_item *create_pcap_item(const u_char *pcap_packet, struct pcap_pkthdr *pcap_header) {
+    size_t pcap_len = pcap_header->caplen;
+    u_char *tmp_packet = mymalloc(pcap_len);
+    memcpy(tmp_packet, pcap_packet, pcap_len);
+
+    pcap_item *pcap = mymalloc(sizeof(pcap_item));
+    pcap->header = *pcap_header;
+    pcap->packet = tmp_packet;
+
+    return pcap;
+}
 
 /*
  * use (source ip:port, destination ip:port) as key, hash pcap_item
@@ -250,6 +255,15 @@ const char *insert_hash_node(byte *pcap_packet, struct pcap_pkthdr *pcap_header)
     if (-1 == hashtbl_insert(get_hash_table(), key, (void *)pcap))
         error("ERROR: insert to hash table failed");
     return key;
+}
+
+pcap_t *get_pcap_handle(char *filename) {
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_t *handle;
+
+    if (!(handle = pcap_open_offline(filename, errbuf)))
+        error("Couldn't open pcap file %s: %s", filename, errbuf);
+    return handle;
 }
 
 int cmp_pcap_packet(pcap_item *p1, pcap_item *p2) {
@@ -395,6 +409,50 @@ HASHNODE *combine_hash_nodes(const char *key1, const char *key2) {
     return hashtbl->nodes[hash1];
 }
 
+
+/*
+HASHNODE *combine_tcp_packet(hash_size index) {
+    HASHTBL *hashtbl = get_hash_table();
+    HASHNODE *node = hashtbl->nodes[index];
+    HASHNODE *prev = hashtbl->nodes[index];
+    HASHNODE *next;
+
+    while (node) {
+        next = node->next;
+        // if no data, then skip it
+        if (!get_tcp_data_length_n(node)) {
+            if (hashtbl->nodes[index] == node) {
+                hashtbl->nodes[index] = prev = next;
+            } else
+                prev->next = next;
+            remove_hash_node(node);
+        // reassemble all PUDs
+        } else if (prev && (get_ip_id_n(node) - get_ip_id_n(prev) == 1)) {
+            pcap_item *ppcap_item = (pcap_item *)prev->data;
+            size_t ppcap_len = ppcap_item->header.caplen;
+            byte *ctcp_data = get_tcp_data_n(node);
+            size_t ctcp_data_len = get_tcp_data_length_n(node);
+
+            u_char *tmp_packet = mymalloc(ppcap_len + ctcp_data_len);
+            memcpy(tmp_packet, ppcap_item->packet, ppcap_len);
+            memcpy(tmp_packet + ppcap_len, ctcp_data, ctcp_data_len);
+            free((void *)ppcap_item->packet);
+            remove_hash_node(node);
+
+            ppcap_item->packet = tmp_packet;
+            ppcap_item->header.caplen += ctcp_data_len;
+            ppcap_item->header.len = ppcap_item->header.caplen;
+            prev->next = next;
+        } else {
+            prev = node;
+        }
+        node = next;
+    }
+
+    return hashtbl->nodes[index];
+}
+*/
+
 HASHNODE *combine_tcp_packet(hash_size index) {
     HASHTBL *hashtbl = get_hash_table();
     HASHNODE *node = hashtbl->nodes[index];
@@ -474,32 +532,31 @@ size_t write_tcp_data_to_file_n(FILE *fp, HASHNODE *node) {
     return write_tcp_data_to_file(fp, data_ptr, data_len);
 }
 
-void create_hash_from_directory(const char *dirname) {
-    // read pcap files to memory
-    DIR *dir;
-    struct dirent *ent;
-    if (!(dir = opendir(dirname)))
-        error("open directory '%s' failed\n", dirname);
-    while ((ent = readdir(dir)) != NULL) {
-        // deal with filename
-        char *filename = ent->d_name;
-        if (!is_pcap_file(filename))
-            continue;
-        char *pcap_filename = pathcat(dirname, filename);
+// read pcap files to memory
+#define create_hash_from_directory(dirname) do {                    \
+    DIR *dir;                                                       \
+    struct dirent *ent;                                             \
+    if (!(dir = opendir(dirname)))                                  \
+        error("open directory '%s' failed\n", dirname);             \
+    while ((ent = readdir(dir)) != NULL) {                          \
+        char *filename = ent->d_name;                               \
+        if (!is_pcap_file(filename))                                \
+            continue;                                               \
+        char *pcap_filename = pathcat(dirname, filename);           \
+                                                                    \
+        const u_char *pcap_packet;                                  \
+        struct pcap_pkthdr header;                                  \
+        pcap_t *handle = get_pcap_handle(pcap_filename);            \
+        while (NULL != (pcap_packet = pcap_next(handle, &header)))  \
+            insert_hash_node(pcap_packet, &header);                 \
+                                                                    \
+        pcap_close(handle);                                         \
+        free(pcap_filename);                                        \
+    }                                                               \
+    closedir(dir);                                                  \
+} while (0)
 
-        const u_char *pcap_packet;
-        struct pcap_pkthdr header;
-        pcap_t *handle = get_pcap_handle(pcap_filename);
-        while (NULL != (pcap_packet = pcap_next(handle, &header)))
-            insert_hash_node(pcap_packet, &header);
-
-        pcap_close(handle);
-        free(pcap_filename);
-    }
-    closedir(dir);
-}
-
-void write_http_data_to_files() {
+void write_tcp_data_to_files() {
     create_hash_from_directory(PCAP_DIR);
     // write http requests and responses
     HASHTBL *hashtbl = get_hash_table();
@@ -536,73 +593,174 @@ void write_http_data_to_files() {
     destory_hash_table();
 }
 
+#undef create_hash_from_directory
+
 // HTTP parse
-int on_body(http_parser* _, const char* at, size_t length) {
-  printf("Body: %.*s\n", (int)length, at);
-  return 0;
+typedef struct {
+    bool on_request;
+    bool on_content_type;
+    bool on_content_encoding;
+    bool is_gzip_encoding;
+    char *content_type;
+    char *url;
+    char *data;
+    size_t data_len;
+} HTTP_info;
+
+static HTTP_info _g_http;
+
+void _init_http_info() {
+    memset(&_g_http, 0, sizeof(_g_http));
+    _g_http.on_request = TRUE;
 }
 
-void http_file_parse(const char *filename) {
-    // init http parser
-    http_parser_settings settings;
-    memset(&settings, 0, sizeof(settings));
-    settings.on_body = on_body;
-    http_parser parser;
-    http_parser_init(&parser, HTTP_BOTH);
-    // http_parser_init(&parser, HTTP_REQUEST);
+void _free_http_info() {
+    if (_g_http.content_type)
+        free(_g_http.content_type);
+    if (_g_http.url)
+        free(_g_http.url);
+    if (_g_http.data)
+        free(_g_http.data);
+    _g_http.content_type = NULL;
+    _g_http.url = NULL;
+    _g_http.data = NULL;
+}
 
+void _set_content_type(const char *at, size_t length) {
+    char *begin = 1 + strnchr(at, '/', length);
+    length -= begin - at;
+    char *end = strnchr(begin, ';', length);
+    _g_http.content_type = strndup(begin, end - begin);
+}
+
+int _on_header_field(http_parser* _, const char* at, size_t length) {
+    _g_http.on_content_type = !strncmp("Content-Type", at, length);
+    _g_http.on_content_encoding = !strncmp("Content-Encoding", at, length);
+    return 0;
+}
+
+int _on_header_value(http_parser* _, const char* at, size_t length) {
+    if (_g_http.on_content_type)
+        _set_content_type(at, length);
+    else if (_g_http.on_content_encoding)
+        _g_http.is_gzip_encoding = !strncmp(at, "gzip", length);
+    return 0;
+}
+
+int _on_url(http_parser* _, const char* at, size_t length) {
+    if (_g_http.on_request)
+        _g_http.url = strndup(at, length);
+    return 0;
+}
+
+int _on_body(http_parser* _, const char* at, size_t length) {
+    if (!_g_http.on_request) {
+        _g_http.data = mymalloc(length);
+        memcpy(_g_http.data, at, length);
+        _g_http.data_len = length;
+    }
+    return 0;
+}
+
+void write_http_info_to_file() {
+    if (!_g_http.url || !_g_http.data || !_g_http.content_type)
+        return;
+    if (_g_http.is_gzip_encoding)
+        _g_http.data = _g_http.data;
+    char *basename = url2filename(_g_http.url);
+    if (!strrchr(basename, '.')) {
+        char *tmp = basename;
+        basename = mystrcat(3, basename, ".", _g_http.content_type);
+        free(tmp);
+    }
+
+    char *filename = pathcat(HTTP_DIR, basename);
+    FILE *fp = fopen(filename, "wb");
+    free(basename);
+    free(filename);
+    if (!fp)
+        error("can't open %s for write\n", filename);
+    fwrite(_g_http.data, 1, _g_http.data_len, fp);
+    fclose(fp);
+}
+
+#define read_file_into_memory(fp, data, data_len) do {      \
+    FILE *fp;                                               \
+    if (!(fp = fopen(filename, "rb")))                      \
+        error("can't open %s for http parse", filename);    \
+    fseek(fp, 0, SEEK_END);                                 \
+    data_len = ftell(fp);                                   \
+    if (data_len == -1)                                     \
+        error("call ftell failed\n");                       \
+    data = mymalloc(data_len);                              \
+    fseek(fp, 0, SEEK_SET);                                 \
+    if (fread(data, 1, data_len, fp) != (size_t)data_len) { \
+        free(data);                                         \
+        error("couldn't read entire file\n");               \
+    }                                                       \
+    fclose(fp);                                             \
+} while (0)
+
+void write_http_data_to_file(const char *filename) {
     // read file into memory
     char *data;
     size_t data_len;
-    FILE *fp = fopen(filename, "rb");
-    if (!fp)
-        error("can't open %s for http parse", filename);
-    fseek(fp, 0, SEEK_END);
-    data_len = ftell(fp);
-    if (data_len == -1)
-        error("call ftell failed\n");
-    data = mymalloc(data_len);
-    fseek(fp, 0, SEEK_SET);
-    if (fread(data, 1, data_len, fp) != (size_t)data_len) {
-        free(data);
-        error("couldn't read entire file\n");
-    }
-    fclose(fp);
+    read_file_into_memory(fp, data, data_len);
 
     const char *begin = data;
     const char *end;
-    const char *token;
     // HTTP request or response end with double "\r\n"
     const char *gap = REQUEST_GAP "\r\n\r\n";
     const unsigned long gap_len = strlen(gap);
-    size_t token_len;
+
+    // init http parser
+    http_parser_settings settings;
+    http_parser parser;
+    _init_http_info();
+
+
     do {
         if (!data_len)
             break;
         // get a request or response string
         end = strstr(begin, gap);
-        token_len = (end == NULL) ? (data + data_len - begin) : (end - begin);
-        token = strndup(begin, token_len);
+        size_t token_len = (end == NULL) ? (data + data_len - begin) : (end - begin);
+        void *token = mymalloc(token_len);
+        memcpy(token, begin, token_len);
         begin = end + gap_len;
 
         // http parse
+        memset(&settings, 0, sizeof(settings));
+        settings.on_url = _on_url;
+        settings.on_body = _on_body;
+        settings.on_header_field = _on_header_field;
+        settings.on_header_value = _on_header_value;
+        http_parser_init(&parser, _g_http.on_request ? HTTP_REQUEST : HTTP_RESPONSE);
         size_t nparsed = http_parser_execute(&parser, &settings, token, token_len);
         if (nparsed != (size_t)token_len) {
-            free((void *)token);
-            free(data);
-            error("%s: %s (%s)\n",
-                  filename,
-                  http_errno_description(HTTP_PARSER_ERRNO(&parser)),
-                  http_errno_name(HTTP_PARSER_ERRNO(&parser)));
+            // free(token);
+            // printf("%s: %s (%s)\n",
+                  // filename,
+                  // http_errno_description(HTTP_PARSER_ERRNO(&parser)),
+                  // http_errno_name(HTTP_PARSER_ERRNO(&parser)));
+            // break;
         }
-        free((void *)token);
+        free(token);
+        if (!_g_http.on_request) {
+            write_http_info_to_file();
+            _free_http_info();
+            _init_http_info();
+        }
+        _g_http.on_request = !_g_http.on_request;
     } while (end);
 
     free(data);
+    _free_http_info();
 }
 
-// END TODO
-void parse_http_files() {
+#undef read_file_into_memory
+
+void write_http_data_to_files() {
     DIR *dir;
     struct dirent *ent;
     if (!(dir = opendir(REQS_DIR)))
@@ -613,7 +771,7 @@ void parse_http_files() {
         if (!is_txt_file(filename))
             continue;
         filename = pathcat(REQS_DIR, filename);
-        http_file_parse(filename);
+        write_http_data_to_file(filename);
         free((void *)filename);
     }
     closedir(dir);
@@ -639,7 +797,8 @@ int main(int argc, char **argv) {
 #endif
     init_environment(argc, argv);
 #ifdef DEBUG
-    handle = get_pcap_handle("/Users/fz/Downloads/test.pcap");
+    // handle = get_pcap_handle("/Users/fz/Downloads/test.pcap");
+    handle = get_pcap_handle("/Users/fz/Downloads/test2.pcap");
     // handle = get_pcap_handle("/Users/fz/Downloads/normal.pcap");
     // handle = get_pcap_handle("/Users/fz/Downloads/wifi.pcap");
 #else
@@ -659,8 +818,8 @@ int main(int argc, char **argv) {
     }
 
     write_pcaps_to_files(handle);
+    write_tcp_data_to_files();
     write_http_data_to_files();
-    // parse_http_files();
 
     pcap_close(handle);
     return 0;

@@ -21,9 +21,12 @@ typedef const unsigned char byte;
 void *mymalloc(size_t size);
 void *mycalloc(size_t count, size_t size);
 
+char *strnchr(const char *s, char ch, size_t n);
+void replacechr(char *str, char old, char new);
 char *mystrdup(const char *s);
 char *mystrcat(int argc, const char *str1, ...);
 char *pathcat(const char *dir, const char *filename);
+char *url2filename(const char *url);
 size_t hexprint(void *ptr, size_t length);
 
 bool is_little_endian();

@@ -2,7 +2,7 @@
 * @Author: fz
 * @Date:   2014-06-09 19:17:17
 * @Last Modified by:   fz
-* @Last Modified time: 2014-06-09 19:24:11
+* @Last Modified time: 2014-06-10 10:51:16
 */
 
 #include "util.h"
@@ -21,6 +21,27 @@ void *mycalloc(size_t count, size_t size)
     if (!ptr)
         error("alloc memory failed\n");
     return ptr;
+}
+
+char *strnchr(const char *s, char ch, size_t n) {
+    while (n--) {
+        if (*s == ch)
+            break;
+        s++;
+    }
+    if (n == 0 && *s != ch)
+        return NULL;
+    return (char *)s;
+}
+
+void replacechr(char *str, char old, char new) {
+    char *ptr;
+    while (1) {
+        ptr = strchr(str, old);
+        if(ptr == NULL)
+            break;
+        str[(int)(ptr - str)]=new;
+    }
 }
 
 char *mystrdup(const char *s)
@@ -66,6 +87,27 @@ char *mystrcat(int argc, const char *str1, ...)
 char *pathcat(const char *dir, const char *filename)
 {
     return mystrcat(3, dir, PATH_DELIMITER, filename);
+}
+
+char *url2filename(const char *url) {
+    size_t url_len = strlen(url);
+    int offset = 0;
+    const char *begin;;
+    if (*url == '/') {
+        if (url_len == 1)
+            return strdup("index");
+        offset = 1;
+    }
+    // end with '/' or can't find '/'
+    const char *end = url + url_len - 1;
+    if (*end == '/' || !(begin = strrchr(url, '/')))
+        begin = url;
+
+
+    if (*end != '/' && !(end = strchr(begin, '?')))
+        end = url + url_len;
+
+    return strndup(begin + offset, end - begin - offset);
 }
 
 size_t hexprint(void *ptr, size_t length)
