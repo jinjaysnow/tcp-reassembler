@@ -6,7 +6,11 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
-#define PATH_DELIMITER "/"
+#ifdef _WIN32
+# define PATH_DELIMITER "\\"
+#else
+# define PATH_DELIMITER "/"
+#endif /* __WIN32__ */
 #ifndef __FILE__
 #define __FILE__ "main"
 #endif /* __FILE__ */

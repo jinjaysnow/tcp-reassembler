@@ -63,6 +63,8 @@ bool is_udp(void *ip_packet) {
 
 // packet infomation
 #define get_ether_type(pcap_packet) (((int)(pcap_packet[12]) << 8) | (int)pcap_packet[13])
+
+
 // IP
 /*
  * @protocol: IPv4 or IPv6
@@ -99,6 +101,80 @@ unsigned short get_ip_id(void *ip_packet) {
 }
 
 #define get_ip_id_n(node) get_ip_id(get_ip_header_n(node))
+
+/*
+ * return something like "192.168.137.1.80--192.168.137.233.8888"
+ */
+const char *get_ip_port_pair(void *ip_packet) {
+    int addr_str_len;
+    void *ip_src;
+    void *ip_dst;
+    int protocol = get_ip_protocol(ip_packet);
+
+    if (is_ip4(protocol)) {
+        addr_str_len = INET_ADDRSTRLEN;
+        ip_src = &_IP4(ip_packet)->ip_src;
+        ip_dst = &_IP4(ip_packet)->ip_dst;
+    } else {
+        addr_str_len = INET6_ADDRSTRLEN;
+        ip_src = &_IP6(ip_packet)->ip6_src;
+        ip_dst = &_IP6(ip_packet)->ip6_dst;
+    }
+
+    char buf_src[INET6_ADDRSTRLEN];
+    char buf_dst[INET6_ADDRSTRLEN];
+    inet_ntop(protocol, ip_src, buf_src, addr_str_len);
+    inet_ntop(protocol, ip_dst, buf_dst, addr_str_len);
+
+    tcp_hdr *tcp_packet = get_tcp_header(ip_packet);
+    int port_src = ntohs(tcp_packet->th_sport);
+    int port_dst = ntohs(tcp_packet->th_dport);
+
+    // max port number in string takes 5 bytes
+    char *str = mymalloc((addr_str_len + 5) * 2 + 5);
+    sprintf(str, "%s.%d--%s.%d", buf_src, port_src, buf_dst, port_dst);
+
+    return (const char *)str;
+}
+
+const char *reverse_ip_port_pair(const char *ip_port_pair) {
+    char *pair2 = strstr(ip_port_pair, "--");
+    char *pair1 = strndup(ip_port_pair, pair2 - ip_port_pair);
+    // 2 is length of "--"
+    return mystrcat(3, pair2 + 2, "--", pair1);
+}
+
+bool is_same_ip_port(void *ip_packet1, void *ip_packet2) {
+    int protocol1 = get_ip_protocol(ip_packet1);
+    int protocol2 = get_ip_protocol(ip_packet2);
+    if (protocol1 != protocol2)
+        return FALSE;
+
+    size_t addr_len;
+    if (is_ip4(protocol1)) {
+        addr_len = sizeof(_IP4(ip_packet1)->ip_src);
+        if (memcmp(&_IP4(ip_packet1)->ip_src, &_IP4(ip_packet2)->ip_src, addr_len))
+            return FALSE;
+        if (memcmp(&_IP4(ip_packet1)->ip_dst, &_IP4(ip_packet2)->ip_dst, addr_len))
+            return FALSE;
+    } else {
+        addr_len = sizeof(_IP6(ip_packet1)->ip6_src);
+        if (memcmp(&_IP6(ip_packet1)->ip6_src, &_IP6(ip_packet2)->ip6_src, addr_len))
+            return FALSE;
+        if (memcmp(&_IP6(ip_packet1)->ip6_dst, &_IP6(ip_packet2)->ip6_dst, addr_len))
+            return FALSE;
+    }
+
+    tcp_hdr *tcp_packet1 = get_tcp_header(ip_packet1);
+    tcp_hdr *tcp_packet2 = get_tcp_header(ip_packet2);
+    if (tcp_packet1->th_sport != tcp_packet2->th_sport)
+        return FALSE;
+    if (tcp_packet1->th_dport != tcp_packet2->th_dport)
+        return FALSE;
+
+    return TRUE;
+}
+
 
 // TCP
 /*
@@ -151,48 +227,6 @@ size_t get_tcp_data_length(void *ip_packet) {
 #define is_tcp_syn(tcp_packet) (tcp_packet->th_flags & TH_SYN)
 
 #define is_tcp_fin(tcp_packet) (tcp_packet->th_flags & TH_FIN)
-
-/*
- * return something like "192.168.137.1.80--192.168.137.233.8888"
- */
-const char *get_ip_port_pair(void *ip_packet) {
-    int addr_len;
-    void *ip_src;
-    void *ip_dst;
-    int protocol = get_ip_protocol(ip_packet);
-
-    if (is_ip4(protocol)) {
-        addr_len = INET_ADDRSTRLEN;
-        ip_src = &_IP4(ip_packet)->ip_src;
-        ip_dst = &_IP4(ip_packet)->ip_dst;
-    } else {
-        addr_len = INET6_ADDRSTRLEN;
-        ip_src = &_IP6(ip_packet)->ip6_src;
-        ip_dst = &_IP6(ip_packet)->ip6_dst;
-    }
-
-    char buf_src[INET6_ADDRSTRLEN];
-    char buf_dst[INET6_ADDRSTRLEN];
-    inet_ntop(protocol, ip_src, buf_src, addr_len);
-    inet_ntop(protocol, ip_dst, buf_dst, addr_len);
-
-    tcp_hdr *tcp_packet = get_tcp_header(ip_packet);
-    int port_src = ntohs(tcp_packet->th_sport);
-    int port_dst = ntohs(tcp_packet->th_dport);
-
-    // max port number in string takes 5 bytes
-    char *str = mymalloc((addr_len + 5) * 2 + 5);
-    sprintf(str, "%s.%d--%s.%d", buf_src, port_src, buf_dst, port_dst);
-
-    return (const char *)str;
-}
-
-const char *reverse_ip_port_pair(const char *ip_port_pair) {
-    char *pair2 = strstr(ip_port_pair, "--");
-    char *pair1 = strndup(ip_port_pair, pair2 - ip_port_pair);
-    // 2 is length of "--"
-    return mystrcat(3, pair2 + 2, "--", pair1);
-}
 
 
 // hash operation
@@ -445,6 +479,18 @@ HASHNODE *combine_hash_nodes(const char *key1, const char *key2) {
     return hashtbl->nodes[hash1];
 }
 
+// TODO: finish this
+bool is_different_tcp_packet_n(HASHNODE *node1, HASHNODE *node2) {
+    void *ip_packet1 = get_ip_header_n(node1);
+    void *ip_packet2 = get_ip_header_n(node2);
+    tcp_hdr *ctcp_packet = get_tcp_header(ip_packet1);
+    tcp_hdr *ntcp_packet = get_tcp_header(ip_packet2);
+
+    return 0;
+    return is_same_ip_port(ip_packet1, ip_packet2)
+           && ctcp_packet->th_seq == ntcp_packet->th_seq
+           && ctcp_packet->th_ack == ntcp_packet->th_ack;
+}
 
 HASHNODE *combine_tcp_packet(hash_size index) {
     HASHTBL *hashtbl = get_hash_table();
@@ -452,10 +498,14 @@ HASHNODE *combine_tcp_packet(hash_size index) {
     HASHNODE *prev = node;
     HASHNODE *next;
 
+    bool should_drop;
     while (node) {
         next = node->next;
+        // if they are duplication packet, then drop it
+        should_drop = next ? is_different_tcp_packet_n(node, next) : FALSE;
         // if no data, then skip node
-        if (0 == get_tcp_data_length_n(node)) {
+        should_drop |= (0 == get_tcp_data_length_n(node));
+        if (should_drop) {
             if (hashtbl->nodes[index] == node)
                 hashtbl->nodes[index] = next;
             else
@@ -662,6 +712,7 @@ void write_http_info_to_file() {
     fclose(fp);                                             \
 } while (0)
 
+#define DEBUG
 void write_http_data_to_file(const char *filename) {
     // read file into memory
     char *data;
@@ -679,8 +730,6 @@ void write_http_data_to_file(const char *filename) {
     void *token;
     size_t left_len;
     size_t token_len;
-
-#undef DEBUG
 
     do {
         if (!data_len)
@@ -747,7 +796,6 @@ void write_http_data_to_files() {
         const char *filename = ent->d_name;
         if (!is_txt_file(filename))
             continue;
-        // filename = "222.20.59.229.48995--101.227.131.102.80.txt";
         filename = pathcat(REQS_DIR, filename);
         write_http_data_to_file(filename);
         free((void *)filename);
