@@ -28,6 +28,7 @@ char *mystrcat(int argc, const char *str1, ...);
 char *pathcat(const char *dir, const char *filename);
 char *url2filename(const char *url);
 size_t hexprint(void *ptr, size_t length);
+size_t getfilesize(FILE *fp);
 
 bool is_little_endian();
 

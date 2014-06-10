@@ -17,8 +17,6 @@
 #include "http_parser.h"
 #include "main.h"
 
-const int REQUEST_GAP_LEN = strlen(REQUEST_GAP);
-
 
 // judge function
 bool is_pcap_file(const char *filename) {
@@ -196,6 +194,7 @@ const char *reverse_ip_port_pair(const char *ip_port_pair) {
     return mystrcat(3, pair2 + 2, "--", pair1);
 }
 
+
 // hash operation
 /*
  * return a single instance of hash table
@@ -228,6 +227,7 @@ void free_hash_node(void *ptr) {
 #define get_hash_index(key) hashtbl_index(get_hash_table(), key)
 
 #define get_hash_nodes(key) hashtbl_get(get_hash_table(), key)
+
 
 /*
  * a pcap item contains a pcap header and a pointer of beignning of packet
@@ -352,6 +352,42 @@ HASHNODE *sort_pcap_packets(HASHNODE *list) {
     }
 }
 
+// file operation
+/*
+ * write pcap packet to pcap file
+ */
+void write_pcap_to_file(pcap_t *handle, HASHNODE *node) {
+    const char *filename = pathcat(PCAP_DIR, mystrcat(2, node->key, ".pcap"));
+
+    pcap_dumper_t *pd;
+    if (!(pd = pcap_dump_open(handle, filename)))
+        error("opening savefile '%s' failed for writing\n", filename);
+
+    while (node) {
+        pcap_item *pcap = (pcap_item *)node->data;
+        struct pcap_pkthdr *pHeader = &pcap->header;
+        const u_char *packet = pcap->packet;
+        pcap_dump((u_char *)pd, pHeader, packet);
+        node = node->next;
+    }
+
+    pcap_dump_close(pd);
+    free((void *)filename);
+}
+
+void write_pcaps_to_files(pcap_t *handle) {
+    HASHTBL *hashtbl = get_hash_table();
+
+    for (int i = 0; i < hashtbl->size; i++) {
+        if (!hashtbl->nodes[i])
+            continue;
+        hashtbl->nodes[i] = sort_pcap_packets(hashtbl->nodes[i]);
+        write_pcap_to_file(handle, hashtbl->nodes[i]);
+        remove_hash_nodes(hashtbl->nodes[i]->key);
+    }
+    destory_hash_table();
+}
+
 
 HASHNODE *combine_hash_nodes(const char *key1, const char *key2) {
     HASHTBL *hashtbl = get_hash_table();
@@ -410,49 +446,6 @@ HASHNODE *combine_hash_nodes(const char *key1, const char *key2) {
 }
 
 
-/*
-HASHNODE *combine_tcp_packet(hash_size index) {
-    HASHTBL *hashtbl = get_hash_table();
-    HASHNODE *node = hashtbl->nodes[index];
-    HASHNODE *prev = hashtbl->nodes[index];
-    HASHNODE *next;
-
-    while (node) {
-        next = node->next;
-        // if no data, then skip it
-        if (!get_tcp_data_length_n(node)) {
-            if (hashtbl->nodes[index] == node) {
-                hashtbl->nodes[index] = prev = next;
-            } else
-                prev->next = next;
-            remove_hash_node(node);
-        // reassemble all PUDs
-        } else if (prev && (get_ip_id_n(node) - get_ip_id_n(prev) == 1)) {
-            pcap_item *ppcap_item = (pcap_item *)prev->data;
-            size_t ppcap_len = ppcap_item->header.caplen;
-            byte *ctcp_data = get_tcp_data_n(node);
-            size_t ctcp_data_len = get_tcp_data_length_n(node);
-
-            u_char *tmp_packet = mymalloc(ppcap_len + ctcp_data_len);
-            memcpy(tmp_packet, ppcap_item->packet, ppcap_len);
-            memcpy(tmp_packet + ppcap_len, ctcp_data, ctcp_data_len);
-            free((void *)ppcap_item->packet);
-            remove_hash_node(node);
-
-            ppcap_item->packet = tmp_packet;
-            ppcap_item->header.caplen += ctcp_data_len;
-            ppcap_item->header.len = ppcap_item->header.caplen;
-            prev->next = next;
-        } else {
-            prev = node;
-        }
-        node = next;
-    }
-
-    return hashtbl->nodes[index];
-}
-*/
-
 HASHNODE *combine_tcp_packet(hash_size index) {
     HASHTBL *hashtbl = get_hash_table();
     HASHNODE *node = hashtbl->nodes[index];
@@ -479,42 +472,6 @@ HASHNODE *combine_tcp_packet(hash_size index) {
     return hashtbl->nodes[index];
 }
 
-// file operation
-/*
- * write pcap packet to pcap file
- */
-void write_pcap_to_file(pcap_t *handle, HASHNODE *node) {
-    const char *filename = pathcat(PCAP_DIR, mystrcat(2, node->key, ".pcap"));
-
-    pcap_dumper_t *pd;
-    if (!(pd = pcap_dump_open(handle, filename)))
-        error("opening savefile '%s' failed for writing\n", filename);
-
-    while (node) {
-        pcap_item *pcap = (pcap_item *)node->data;
-        struct pcap_pkthdr *pHeader = &pcap->header;
-        const u_char *packet = pcap->packet;
-        pcap_dump((u_char *)pd, pHeader, packet);
-        node = node->next;
-    }
-
-    pcap_dump_close(pd);
-    free((void *)filename);
-}
-
-void write_pcaps_to_files(pcap_t *handle) {
-    HASHTBL *hashtbl = get_hash_table();
-
-    for (int i = 0; i < hashtbl->size; i++) {
-        if (!hashtbl->nodes[i])
-            continue;
-        hashtbl->nodes[i] = sort_pcap_packets(hashtbl->nodes[i]);
-        write_pcap_to_file(handle, hashtbl->nodes[i]);
-        remove_hash_nodes(hashtbl->nodes[i]->key);
-    }
-    destory_hash_table();
-}
-
 /*
  * write tcp data (maybe contains HTTP request and response) to txt file
  */
@@ -529,7 +486,13 @@ size_t write_tcp_data_to_file_n(FILE *fp, HASHNODE *node) {
     tcp_hdr *tcp_packet = get_tcp_header(ip_packet);
     size_t data_len = get_tcp_data_length(ip_packet);
     byte *data_ptr = get_tcp_data(tcp_packet);
-    return write_tcp_data_to_file(fp, data_ptr, data_len);
+    size_t nwrite = write_tcp_data_to_file(fp, data_ptr, data_len);
+
+    HASHNODE *next = node->next;
+    // if not nearby packet, then write a delimiter
+    if (next && (get_ip_id_n(next) - get_ip_id_n(node) != 1))
+        fwrite(REQUEST_GAP, 1, REQUEST_GAP_LEN, fp);
+    return nwrite;
 }
 
 // read pcap files to memory
@@ -574,7 +537,7 @@ void write_tcp_data_to_files() {
         key2 = reverse_ip_port_pair(key1);
         // combin two direction ip:port pair and write to file
         node1 = combine_hash_nodes(key1, key2);
-        // delete all nodes having no data
+        // delete all empty nodes (no tcp data)
         node1 = combine_tcp_packet(get_hash_index(node1->key));
         // skip empty file
         if (!node1)
@@ -582,8 +545,7 @@ void write_tcp_data_to_files() {
         filename = pathcat(REQS_DIR, mystrcat(2, node1->key, ".txt"));
         FILE *fp = fopen(filename, "wb");
         while (node1) {
-            if (write_tcp_data_to_file_n(fp, node1) && node1->next)
-                fwrite(REQUEST_GAP, 1, REQUEST_GAP_LEN, fp);
+            write_tcp_data_to_file_n(fp, node1);
             node1 = node1->next;
         }
         fclose(fp);
@@ -675,7 +637,7 @@ void write_http_info_to_file() {
     }
 
     char *filename = pathcat(HTTP_DIR, basename);
-    FILE *fp = fopen(filename, "wb");
+    FILE *fp = fopen(filename, "ab");
     free(basename);
     free(filename);
     if (!fp)
@@ -688,13 +650,9 @@ void write_http_info_to_file() {
     FILE *fp;                                               \
     if (!(fp = fopen(filename, "rb")))                      \
         error("can't open %s for http parse", filename);    \
-    fseek(fp, 0, SEEK_END);                                 \
-    data_len = ftell(fp);                                   \
-    if (data_len == -1)                                     \
-        error("call ftell failed\n");                       \
+    data_len = getfilesize(fp);                             \
     data = mymalloc(data_len);                              \
-    fseek(fp, 0, SEEK_SET);                                 \
-    if (fread(data, 1, data_len, fp) != (size_t)data_len) { \
+    if (fread(data, 1, data_len, fp) != data_len) {         \
         free(data);                                         \
         error("couldn't read entire file\n");               \
     }                                                       \
@@ -709,9 +667,8 @@ void write_http_data_to_file(const char *filename) {
 
     const char *begin = data;
     const char *end;
-    // HTTP request or response end with double "\r\n"
-    const char *gap = REQUEST_GAP "\r\n\r\n";
-    const unsigned long gap_len = strlen(gap);
+    // count CR LF number
+    unsigned long crlf_count = 0;
 
     // init http parser
     http_parser_settings settings;
@@ -723,11 +680,13 @@ void write_http_data_to_file(const char *filename) {
         if (!data_len)
             break;
         // get a request or response string
-        end = strstr(begin, gap);
+        end = strstr(begin, REQUEST_GAP);
         size_t token_len = (end == NULL) ? (data + data_len - begin) : (end - begin);
         void *token = mymalloc(token_len);
         memcpy(token, begin, token_len);
-        begin = end + gap_len;
+        begin = end + REQUEST_GAP_LEN;
+        while (end && (*begin == '\r' || *begin == '\n'))
+            begin++;
 
         // http parse
         memset(&settings, 0, sizeof(settings));
@@ -737,13 +696,11 @@ void write_http_data_to_file(const char *filename) {
         settings.on_header_value = _on_header_value;
         http_parser_init(&parser, _g_http.on_request ? HTTP_REQUEST : HTTP_RESPONSE);
         size_t nparsed = http_parser_execute(&parser, &settings, token, token_len);
-        if (nparsed != (size_t)token_len) {
-            // free(token);
+        if (nparsed != token_len) {
             // printf("%s: %s (%s)\n",
-                  // filename,
-                  // http_errno_description(HTTP_PARSER_ERRNO(&parser)),
-                  // http_errno_name(HTTP_PARSER_ERRNO(&parser)));
-            // break;
+            //        filename,
+            //        http_errno_description(HTTP_PARSER_ERRNO(&parser)),
+            //        http_errno_name(HTTP_PARSER_ERRNO(&parser)));
         }
         free(token);
         if (!_g_http.on_request) {

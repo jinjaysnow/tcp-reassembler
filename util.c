@@ -2,7 +2,7 @@
 * @Author: fz
 * @Date:   2014-06-09 19:17:17
 * @Last Modified by:   fz
-* @Last Modified time: 2014-06-10 10:51:16
+* @Last Modified time: 2014-06-10 14:44:05
 */
 
 #include "util.h"
@@ -141,4 +141,15 @@ bool is_little_endian()
 {
     unsigned int i = 1;
     return *(char *)&i;
+}
+
+size_t getfilesize(FILE *fp) {
+    fseek(fp, 0, SEEK_END);
+    size_t data_len = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (data_len == -1) {
+        fclose(fp);
+        error("call ftell failed\n");
+    }
+    return data_len;
 }

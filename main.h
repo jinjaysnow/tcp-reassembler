@@ -24,6 +24,7 @@
 // constant
 // use 0D0A0D0A0D0A as delimiter
 #define REQUEST_GAP "\r\n\r\n\r\n"
+#define REQUEST_GAP_LEN 6
 
 #define PCAP_DIR "pcaps"
 #define REQS_DIR "requests"
