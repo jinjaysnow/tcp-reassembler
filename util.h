@@ -6,7 +6,11 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
-#define PATH_DELIMITER "/"
+#ifdef _WIN32
+# define PATH_DELIMITER "\\"
+#else
+# define PATH_DELIMITER "/"
+#endif /* __WIN32__ */
 #ifndef __FILE__
 #define __FILE__ "main"
 #endif /* __FILE__ */
@@ -18,6 +22,10 @@
 typedef int bool;
 typedef const unsigned char byte;
 
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+
+void *mymemmem(const void *haystack, size_t haystacklen, const void *needle, size_t needlelen);
 void *mymalloc(size_t size);
 void *mycalloc(size_t count, size_t size);
 

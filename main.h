@@ -47,5 +47,6 @@ typedef struct {
 
 
 int get_ip_protocol(void *ip_packet);
+tcp_hdr *get_tcp_header(void *ip_packet);
 
 #endif /* _MAIN_H_INCLUDE_ */
